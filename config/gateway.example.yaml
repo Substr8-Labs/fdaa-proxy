@@ -1,0 +1,90 @@
+# FDAA Proxy Configuration
+# https://github.com/Substr8-Labs/fdaa-proxy
+#
+# Copy to gateway.yaml and customize.
+
+server:
+  host: 0.0.0.0
+  port: 8766
+  workers: 1
+
+# ACC capability token validation
+acc:
+  enabled: false
+  # issuer: "https://acc.substr8labs.com"
+  # public_key_path: /etc/fdaa/acc-public.pem
+  dev_mode: true  # Skip validation in development
+
+# DCT audit chain
+dct:
+  enabled: true
+  storage: sqlite  # sqlite | mongodb | postgres | memory
+  path: /var/lib/fdaa/audit.db
+  # mongodb_uri: mongodb://localhost:27017
+
+# MCP server connections
+gateways:
+  # GitHub - Developer Access
+  github:
+    server: "@anthropic/mcp-server-github"
+    env:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+    policy:
+      mode: allowlist
+      write_requires_approval: false
+      delete_requires_approval: true
+      tools:
+        # Read operations - allowed freely
+        - name: get_file_contents
+          category: read
+        - name: search_code
+          category: read
+        - name: search_issues
+          category: read
+        - name: list_issues
+          category: read
+        - name: get_issue
+          category: read
+        - name: list_commits
+          category: read
+        - name: get_pull_request
+          category: read
+        - name: list_pull_requests
+          category: read
+        
+        # Write operations - allowed for developers
+        - name: create_issue
+          category: write
+        - name: update_issue
+          category: write
+        - name: add_issue_comment
+          category: write
+        - name: create_pull_request
+          category: write
+        - name: create_branch
+          category: write
+        - name: push_files
+          category: write
+        
+        # Delete operations - require approval
+        - name: delete_branch
+          category: delete
+          requires_approval: true
+        - name: delete_file
+          category: delete
+          requires_approval: true
+
+  # Slack - Read Only
+  # slack:
+  #   server: "@anthropic/mcp-server-slack"
+  #   env:
+  #     SLACK_TOKEN: ${SLACK_TOKEN}
+  #   policy:
+  #     mode: allowlist
+  #     tools:
+  #       - name: list_channels
+  #         category: read
+  #       - name: get_channel_history
+  #         category: read
+  #       - name: search_messages
+  #         category: read

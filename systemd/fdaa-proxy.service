@@ -1,0 +1,31 @@
+[Unit]
+Description=FDAA Proxy - Governed MCP Gateway
+Documentation=https://github.com/Substr8-Labs/fdaa-proxy
+After=network.target
+
+[Service]
+Type=simple
+User=fdaa
+Group=fdaa
+WorkingDirectory=/opt/fdaa-proxy
+ExecStart=/usr/local/bin/fdaa-proxy start -c /etc/fdaa/gateway.yaml
+Restart=always
+RestartSec=10
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/fdaa
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fdaa-proxy
+
+[Install]
+WantedBy=multi-user.target

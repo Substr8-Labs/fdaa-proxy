@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fdaa-proxy"
+version = "0.1.0"
+description = "Governed MCP Gateway with Cryptographic Audit Trails"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+    { name = "Substr8 Labs", email = "hello@substr8labs.com" }
+]
+keywords = ["mcp", "gateway", "ai", "agents", "fdaa", "governance", "audit"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Security",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "httpx>=0.26.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "click>=8.0.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+mongodb = ["pymongo>=4.0.0"]
+postgres = ["asyncpg>=0.29.0", "sqlalchemy>=2.0.0"]
+otel = ["opentelemetry-api>=1.0.0", "opentelemetry-sdk>=1.0.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+all = ["fdaa-proxy[mongodb,postgres,otel,dev]"]
+
+[project.scripts]
+fdaa-proxy = "fdaa_proxy.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Substr8-Labs/fdaa-proxy"
+Documentation = "https://docs.substr8labs.com/fdaa-proxy"
+Repository = "https://github.com/Substr8-Labs/fdaa-proxy"
+Issues = "https://github.com/Substr8-Labs/fdaa-proxy/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fdaa_proxy"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

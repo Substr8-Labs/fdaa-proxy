@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  fdaa-proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fdaa-proxy
+    ports:
+      - "8766:8766"
+    volumes:
+      - ../config:/app/config:ro
+      - fdaa-data:/data
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - SLACK_TOKEN=${SLACK_TOKEN:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8766/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional: MongoDB for persistent audit logs
+  mongodb:
+    image: mongo:7
+    container_name: fdaa-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    profiles:
+      - mongodb
+
+volumes:
+  fdaa-data:
+  mongo-data:
+
+networks:
+  default:
+    name: fdaa-network
