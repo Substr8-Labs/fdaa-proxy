@@ -539,6 +539,59 @@ def openclaw_status(port: int):
 
 
 # =============================================================================
+# Verify Commands
+# =============================================================================
+
+@cli.group()
+def verify():
+    """Verification UI and audit chain tools."""
+    pass
+
+
+@verify.command("serve")
+@click.option("--host", "-h", default="0.0.0.0", help="Host to bind to")
+@click.option("--port", "-p", default=8080, type=int, help="Port to bind to")
+@click.option("--jaeger-url", default="http://localhost:16686", help="Jaeger URL")
+@click.option("--dct-path", default="/data/dct", help="DCT storage path")
+def verify_serve(host: str, port: int, jaeger_url: str, dct_path: str):
+    """Start the verification UI server."""
+    import os
+    os.environ["JAEGER_URL"] = jaeger_url
+    os.environ["DCT_STORAGE_PATH"] = dct_path
+    
+    console.print(Panel.fit(
+        f"[bold blue]FDAA Verification UI[/bold blue]\n\n"
+        f"Server: http://{host}:{port}\n"
+        f"Jaeger: {jaeger_url}\n"
+        f"DCT Path: {dct_path}",
+        title="🔐 Starting"
+    ))
+    
+    from .verify import run_server
+    run_server(host=host, port=port)
+
+
+@verify.command("check")
+@click.option("--dct-path", default="/data/dct", help="DCT storage path")
+def verify_check(dct_path: str):
+    """Verify DCT chain integrity."""
+    import os
+    os.environ["DCT_STORAGE_PATH"] = dct_path
+    
+    from .verify.app import load_dct_entries, verify_chain
+    
+    entries = load_dct_entries()
+    result = verify_chain(entries)
+    
+    if result.valid:
+        console.print(f"[green]✓[/green] Chain valid ({result.entries_checked} entries)")
+    else:
+        console.print(f"[red]✗[/red] Chain invalid!")
+        for error in result.errors:
+            console.print(f"  [red]•[/red] {error}")
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
