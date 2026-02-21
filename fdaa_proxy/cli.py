@@ -604,6 +604,171 @@ def acc_verify(token: str, key_path: str, public_key: str):
 
 
 # =============================================================================
+# SafeMode Snapshot Commands
+# =============================================================================
+
+@cli.group()
+def snapshot():
+    """SafeMode snapshot management."""
+    pass
+
+
+@snapshot.command("create")
+@click.argument("source_path")
+@click.option("--retention", "-r", default=30, type=int, help="Retention period in days")
+@click.option("--gateway-id", "-g", default="cli", help="Gateway ID")
+@click.option("--agent-id", "-a", help="Agent ID")
+@click.option("--storage", "-s", default="./snapshots", help="Snapshot storage path")
+def snapshot_create(source_path: str, retention: int, gateway_id: str, agent_id: str, storage: str):
+    """Create a SafeMode snapshot."""
+    from .safemode import SnapshotManager, SnapshotConfig
+    
+    config = SnapshotConfig(storage_path=Path(storage))
+    manager = SnapshotManager(config)
+    
+    try:
+        snapshot = manager.create(
+            source_path=Path(source_path),
+            retention_days=retention,
+            gateway_id=gateway_id,
+            agent_id=agent_id,
+        )
+        
+        console.print(Panel(
+            f"[bold green]Snapshot created![/bold green]\n\n"
+            f"ID: [cyan]{snapshot.id}[/cyan]\n"
+            f"Hash: [dim]{snapshot.hash[:16]}...[/dim]\n"
+            f"Size: {snapshot.size_bytes:,} bytes ({snapshot.file_count} files)\n"
+            f"Locked until: [yellow]{snapshot.retention_until.strftime('%Y-%m-%d %H:%M')}[/yellow]\n"
+            f"Signed: {'✓' if snapshot.signature else '✗'}",
+            title="🔒 SafeMode Snapshot"
+        ))
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed: {e}")
+        sys.exit(1)
+
+
+@snapshot.command("list")
+@click.option("--agent-id", "-a", help="Filter by agent ID")
+@click.option("--include-expired", is_flag=True, help="Include expired snapshots")
+@click.option("--storage", "-s", default="./snapshots", help="Snapshot storage path")
+def snapshot_list(agent_id: str, include_expired: bool, storage: str):
+    """List SafeMode snapshots."""
+    from .safemode import SnapshotManager, SnapshotConfig
+    
+    config = SnapshotConfig(storage_path=Path(storage))
+    manager = SnapshotManager(config)
+    
+    snapshots = manager.list(agent_id=agent_id, include_expired=include_expired)
+    
+    if not snapshots:
+        console.print("[yellow]No snapshots found[/yellow]")
+        return
+    
+    table = Table(title="SafeMode Snapshots")
+    table.add_column("ID", style="cyan")
+    table.add_column("Created")
+    table.add_column("Locked Until")
+    table.add_column("Size")
+    table.add_column("Status")
+    
+    for s in snapshots:
+        status = "[green]🔒 Locked[/green]" if s.is_locked() else "[dim]Unlocked[/dim]"
+        table.add_row(
+            s.id,
+            s.created_at.strftime("%Y-%m-%d %H:%M"),
+            s.retention_until.strftime("%Y-%m-%d %H:%M"),
+            f"{s.size_bytes:,} B",
+            status,
+        )
+    
+    console.print(table)
+
+
+@snapshot.command("verify")
+@click.argument("snapshot_id")
+@click.option("--storage", "-s", default="./snapshots", help="Snapshot storage path")
+def snapshot_verify(snapshot_id: str, storage: str):
+    """Verify snapshot integrity."""
+    from .safemode import SnapshotManager, SnapshotConfig
+    
+    config = SnapshotConfig(storage_path=Path(storage))
+    manager = SnapshotManager(config)
+    
+    result = manager.verify(snapshot_id)
+    
+    if result["valid"]:
+        console.print(Panel(
+            f"[bold green]✓ Snapshot valid![/bold green]\n\n"
+            f"Snapshot: {snapshot_id}\n"
+            f"Locked: {'Yes' if result['is_locked'] else 'No'}\n"
+            f"Until: {result['retention_until']}\n"
+            f"Checks: {result['checks']}",
+            title="🔒 Verification"
+        ))
+    else:
+        console.print(f"[red]✗[/red] Invalid: {result.get('error', 'Unknown error')}")
+        sys.exit(1)
+
+
+@snapshot.command("recover")
+@click.argument("snapshot_id")
+@click.argument("target_path")
+@click.option("--storage", "-s", default="./snapshots", help="Snapshot storage path")
+@click.option("--no-verify", is_flag=True, help="Skip hash verification")
+def snapshot_recover(snapshot_id: str, target_path: str, storage: str, no_verify: bool):
+    """Recover from a snapshot."""
+    from .safemode import SnapshotManager, SnapshotConfig
+    
+    config = SnapshotConfig(storage_path=Path(storage))
+    manager = SnapshotManager(config)
+    
+    try:
+        success = manager.recover(
+            snapshot_id=snapshot_id,
+            target_path=Path(target_path),
+            verify=not no_verify,
+        )
+        
+        if success:
+            console.print(f"[green]✓[/green] Recovered to {target_path}")
+        else:
+            console.print("[red]✗[/red] Recovery failed (hash mismatch)")
+            sys.exit(1)
+            
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed: {e}")
+        sys.exit(1)
+
+
+@snapshot.command("delete")
+@click.argument("snapshot_id")
+@click.option("--force", is_flag=True, help="Force delete even if locked")
+@click.option("--storage", "-s", default="./snapshots", help="Snapshot storage path")
+def snapshot_delete(snapshot_id: str, force: bool, storage: str):
+    """Delete a snapshot (if not locked)."""
+    from .safemode import SnapshotManager, SnapshotConfig
+    
+    config = SnapshotConfig(storage_path=Path(storage))
+    manager = SnapshotManager(config)
+    
+    try:
+        success = manager.delete(snapshot_id, force=force)
+        
+        if success:
+            console.print(f"[green]✓[/green] Deleted {snapshot_id}")
+        else:
+            console.print(f"[red]✗[/red] Cannot delete: snapshot is locked")
+            console.print("Use --force to override (not recommended)")
+            sys.exit(1)
+            
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed: {e}")
+        sys.exit(1)
+
+
+# =============================================================================
 # OpenClaw Proxy Commands
 # =============================================================================
 
