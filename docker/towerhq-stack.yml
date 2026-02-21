@@ -1,0 +1,137 @@
+# TowerHQ FDAA Proxy Stack
+# 
+# Full FDAA infrastructure with ACC cryptographic auth
+#
+# Deploy: docker stack deploy -c towerhq-stack.yml towerhq
+
+version: "3.8"
+
+networks:
+  towerhq-gateways:
+    external: true
+
+volumes:
+  fdaa-data:
+  acc-keys:
+
+configs:
+  acc-public-key:
+    file: /home/node/.openclaw/secrets/acc-keys/public.key
+
+secrets:
+  acc-private-key:
+    file: /home/node/.openclaw/secrets/acc-keys/private.key
+
+services:
+  # FDAA Proxy - Governed OpenClaw Gateway
+  fdaa-proxy:
+    image: fdaa-proxy:latest
+    command:
+      - fdaa-proxy
+      - openclaw
+      - start
+      - --host=0.0.0.0
+      - --port=8800
+      - --upstream=ws://shared-gateway:18789
+      - --audit-db=/data/audit.db
+      - --acc-key=/run/configs/public.key
+      - --acc-issuer=https://acc.substr8labs.com
+    environment:
+      - OPENCLAW_GATEWAY_TOKEN=towerhq-internal-token-2026
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_SERVICE_NAME=fdaa-proxy
+    configs:
+      - source: acc-public-key
+        target: /run/configs/public.key
+    volumes:
+      - fdaa-data:/data
+    networks:
+      - towerhq-gateways
+    deploy:
+      mode: replicated
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost',8800)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Shared OpenClaw Gateway (upstream)
+  shared-gateway:
+    image: towerhq/gateway-shared:v9
+    ports:
+      - "19000:18789"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    networks:
+      - towerhq-gateways
+    deploy:
+      mode: replicated
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:18789/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # HTTP Bridge - REST to WebSocket
+  bridge:
+    image: towerhq/bridge:v17
+    ports:
+      - "3100:3100"
+    environment:
+      - BRIDGE_PORT=3100
+      - BRIDGE_SECRET=${BRIDGE_SECRET}
+      - GATEWAY_URL=ws://fdaa-proxy:8800
+      - GATEWAY_TOKEN=towerhq-internal-token-2026
+    networks:
+      - towerhq-gateways
+    deploy:
+      mode: replicated
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Jaeger Tracing
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    ports:
+      - "16686:16686"  # UI
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - towerhq-gateways
+    deploy:
+      mode: replicated
+      replicas: 1
+
+  # Verification UI
+  verify:
+    image: fdaa-proxy:latest
+    command:
+      - fdaa-proxy
+      - verify
+      - serve
+      - --host=0.0.0.0
+      - --port=8080
+      - --jaeger-url=http://jaeger:16686
+      - --dct-path=/data
+    ports:
+      - "8080:8080"
+    volumes:
+      - fdaa-data:/data:ro
+    networks:
+      - towerhq-gateways
+    deploy:
+      mode: replicated
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost',8080)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

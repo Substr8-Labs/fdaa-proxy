@@ -784,25 +784,52 @@ def openclaw():
 @click.option("--upstream", "-u", default="ws://localhost:18789", help="Upstream OpenClaw Gateway URL")
 @click.option("--upstream-token", envvar="OPENCLAW_GATEWAY_TOKEN", help="Upstream gateway token")
 @click.option("--require-acc", is_flag=True, help="Require ACC tokens for all connections")
+@click.option("--acc-key", envvar="ACC_PUBLIC_KEY_PATH", help="Path to ACC public key for signature verification")
+@click.option("--acc-issuer", envvar="ACC_ISSUER", help="Expected ACC token issuer")
 @click.option("--audit-db", default="./openclaw-audit.db", help="Audit database path")
-def openclaw_start(host: str, port: int, upstream: str, upstream_token: str, require_acc: bool, audit_db: str):
+def openclaw_start(
+    host: str, 
+    port: int, 
+    upstream: str, 
+    upstream_token: str, 
+    require_acc: bool, 
+    acc_key: str,
+    acc_issuer: str,
+    audit_db: str
+):
     """Start the OpenClaw Gateway proxy."""
     import asyncio
     from .dct import DCTLogger
     from .acc import ACCValidator
     from .openclaw.proxy import run_proxy
     
+    # Determine ACC mode
+    use_crypto = bool(acc_key)
+    acc_mode = "ED25519" if use_crypto else "dev"
+    
     console.print(Panel(
         f"[bold]FDAA OpenClaw Proxy[/bold]\n"
         f"Listening: [cyan]ws://{host}:{port}[/cyan]\n"
         f"Upstream: [cyan]{upstream}[/cyan]\n"
-        f"ACC Required: {'Yes' if require_acc else 'No'}",
+        f"ACC Required: {'Yes' if require_acc else 'No'}\n"
+        f"ACC Mode: [{'green' if use_crypto else 'yellow'}]{acc_mode}[/{'green' if use_crypto else 'yellow'}]",
         title="🚀 Starting"
     ))
     
     # Initialize components
     dct_logger = DCTLogger(storage="sqlite", path=audit_db)
-    acc_validator = ACCValidator(dev_mode=True)  # Dev mode for now
+    
+    # ACC validator - use crypto if key provided
+    if use_crypto:
+        acc_validator = ACCValidator(
+            issuer=acc_issuer,
+            public_key_path=acc_key,
+            dev_mode=False,
+        )
+        console.print(f"[green]✓[/green] ACC crypto enabled with key: {acc_key}")
+    else:
+        acc_validator = ACCValidator(dev_mode=True)
+        console.print(f"[yellow]⚠[/yellow] ACC in dev mode (structure validation only)")
     
     asyncio.run(run_proxy(
         host=host,
