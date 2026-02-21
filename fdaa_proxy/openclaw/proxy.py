@@ -135,8 +135,13 @@ class OpenClawProxy:
         
         try:
             # Connect to upstream FIRST (OpenClaw sends challenge immediately)
+            # Set Origin header to match allowedOrigins config
             try:
-                session.upstream_ws = await websockets.connect(self.upstream_url)
+                extra_headers = {"Origin": "http://fdaa-proxy:8800"}
+                session.upstream_ws = await websockets.connect(
+                    self.upstream_url,
+                    additional_headers=extra_headers
+                )
                 logger.info(f"Connected to upstream: {self.upstream_url}")
             except Exception as e:
                 logger.error(f"Failed to connect to upstream: {e}")
@@ -376,13 +381,20 @@ class OpenClawProxy:
     def _log_event(self, event_type: str, **kwargs):
         """Log an event to DCT."""
         if self.dct_logger:
+            # Extract only supported DCT parameters
             self.dct_logger.log(
                 event_type=event_type,
                 gateway_id="openclaw-proxy",
-                **kwargs
+                tool=kwargs.get("tool"),
+                arguments=kwargs,  # Store all kwargs as arguments
+                result=kwargs.get("result"),
+                error=kwargs.get("error"),
+                persona=kwargs.get("persona"),
+                role=kwargs.get("role"),
+                reasoning=kwargs.get("reasoning"),
+                acc_token_id=kwargs.get("acc_token_id"),
             )
-        else:
-            logger.info(f"Event: {event_type} - {kwargs}")
+        logger.info(f"DCT Event: {event_type} - {kwargs}")
     
     @property
     def stats(self) -> Dict[str, Any]:
