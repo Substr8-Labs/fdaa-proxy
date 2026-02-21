@@ -134,23 +134,37 @@ class OpenClawProxy:
         logger.info(f"Client connected: {session_id}")
         
         try:
-            # Wait for connect request
-            first_frame = await websocket.recv()
+            # Connect to upstream FIRST (OpenClaw sends challenge immediately)
+            try:
+                session.upstream_ws = await websockets.connect(self.upstream_url)
+                logger.info(f"Connected to upstream: {self.upstream_url}")
+            except Exception as e:
+                logger.error(f"Failed to connect to upstream: {e}")
+                await self._send_error(websocket, "0", "UPSTREAM_ERROR", f"Failed to connect: {e}")
+                return
+            
+            # Receive challenge from upstream and forward to client
+            challenge_frame = await session.upstream_ws.recv()
+            logger.info(f"Received challenge from upstream")
+            await websocket.send(challenge_frame)
+            
+            # Wait for connect request from client
+            connect_frame = await websocket.recv()
             
             try:
-                frame = Frame.parse(first_frame)
+                frame = Frame.parse(connect_frame)
             except Exception as e:
-                logger.error(f"Invalid first frame: {e}")
+                logger.error(f"Invalid connect frame: {e}")
                 await self._send_error(websocket, "0", "INVALID_FRAME", "Invalid frame format")
                 return
             
             # Must be a connect request
             if not isinstance(frame, Request) or frame.method != "connect":
-                logger.error(f"First frame must be connect request, got: {frame}")
-                await self._send_error(websocket, "0", "INVALID_HANDSHAKE", "First frame must be connect")
+                logger.error(f"Expected connect request, got: {frame.method if isinstance(frame, Request) else frame}")
+                await self._send_error(websocket, "0", "INVALID_HANDSHAKE", "Expected connect request")
                 return
             
-            # Process connect
+            # Process connect (validates ACC, modifies token, forwards)
             success = await self._handle_connect(session, frame)
             if not success:
                 return
@@ -161,7 +175,7 @@ class OpenClawProxy:
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Client disconnected: {session_id}")
         except Exception as e:
-            logger.error(f"Session error: {e}")
+            logger.error(f"Session error: {e}", exc_info=True)
         finally:
             # Cleanup
             if session.upstream_ws:
@@ -174,9 +188,8 @@ class OpenClawProxy:
         
         1. Extract ACC token if present
         2. Validate ACC token
-        3. Connect to upstream
-        4. Forward connect (with upstream token)
-        5. Return response to client
+        3. Forward connect (with upstream token) to already-connected upstream
+        4. Return response to client
         """
         params = ConnectParams.from_dict(request.params)
         session.connect_params = params
@@ -219,7 +232,7 @@ class OpenClawProxy:
                 session.acc_token = result.token
                 logger.info(f"ACC token validated for {params.client_id}")
         
-        # Connect to upstream
+        # Forward connect to upstream (already connected)
         try:
             # Modify connect params to use upstream token
             upstream_params = dict(request.params)
@@ -234,10 +247,9 @@ class OpenClawProxy:
                 params=upstream_params,
             )
             
-            session.upstream_ws = await websockets.connect(self.upstream_url)
-            
             # Forward connect to upstream
             await session.upstream_ws.send(upstream_request.to_json())
+            logger.info(f"Forwarded connect request to upstream")
             
             # Wait for response
             response_data = await session.upstream_ws.recv()
@@ -250,6 +262,9 @@ class OpenClawProxy:
                     client_id=params.client_id,
                     acc_token_id=session.acc_token.token_id if session.acc_token else None,
                 )
+                logger.info(f"Connect successful for {params.client_id}")
+            else:
+                logger.warning(f"Connect failed: {response_data[:200]}")
             
             # Forward response to client
             await session.client_ws.send(response_data)
@@ -257,7 +272,7 @@ class OpenClawProxy:
             return session.authenticated
             
         except Exception as e:
-            logger.error(f"Failed to connect to upstream: {e}")
+            logger.error(f"Failed during connect handshake: {e}", exc_info=True)
             await self._send_error(
                 session.client_ws,
                 request.id,
