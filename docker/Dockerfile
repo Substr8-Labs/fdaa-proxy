@@ -1,35 +1,24 @@
-# FDAA Proxy - Governed MCP Gateway
+# FDAA Proxy - Governed Gateway
 FROM python:3.11-slim
-
-# Install Node.js for MCP server spawning (npx)
-RUN apt-get update && apt-get install -y \
-    curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
-
-# Copy application
+# Copy everything needed for install
+COPY pyproject.toml README.md ./
 COPY fdaa_proxy/ fdaa_proxy/
+
+# Install
+RUN pip install --no-cache-dir .
 
 # Create data directory for audit logs
 RUN mkdir -p /data
 
-# Default config location
-ENV FDAA_CONFIG=/app/config/gateway.yaml
+# Expose ports
+EXPOSE 8766 8800
 
-# Expose port
-EXPOSE 8766
+# Health check for OpenClaw proxy mode
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import socket; s=socket.socket(); s.connect(('localhost',8800)); s.close()" || exit 1
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8766/health || exit 1
-
-# Run server
-CMD ["fdaa-proxy", "start", "-c", "/app/config/gateway.yaml"]
+# Default: OpenClaw proxy mode
+CMD ["fdaa-proxy", "openclaw", "start", "--host", "0.0.0.0", "--port", "8800"]

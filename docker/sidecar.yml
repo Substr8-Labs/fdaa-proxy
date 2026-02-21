@@ -1,0 +1,46 @@
+# FDAA Proxy Sidecar for TowerHQ Stack
+# 
+# Deploy alongside towerhq_bridge and towerhq_shared-gateway
+#
+# Step 1: Build the image
+#   docker build -t fdaa-proxy:latest -f docker/Dockerfile .
+#
+# Step 2: Deploy to stack
+#   docker stack deploy -c docker/sidecar.yml towerhq
+#
+# Step 3: Update bridge to use proxy
+#   GATEWAY_URL=ws://fdaa-proxy:8800
+
+version: '3.8'
+
+services:
+  fdaa-proxy:
+    image: fdaa-proxy:latest
+    command: ["fdaa-proxy", "openclaw", "start", "--host", "0.0.0.0", "--port", "8800", "--upstream", "ws://shared-gateway:18789", "--audit-db", "/data/audit.db"]
+    environment:
+      - GATEWAY_TOKEN=${GATEWAY_TOKEN:-towerhq-internal-token-2026}
+    volumes:
+      - fdaa-data:/data
+    networks:
+      - default
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost',8800)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  fdaa-data:
+
+networks:
+  default:
+    name: towerhq-gateways
+    external: true
