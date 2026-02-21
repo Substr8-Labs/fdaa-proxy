@@ -473,6 +473,72 @@ def approvals_deny(gateway_id: str, request_id: str, by: str, port: int):
 
 
 # =============================================================================
+# OpenClaw Proxy Commands
+# =============================================================================
+
+@cli.group()
+def openclaw():
+    """OpenClaw Gateway proxy commands."""
+    pass
+
+
+@openclaw.command("start")
+@click.option("--host", "-h", default="0.0.0.0", help="Host to bind to")
+@click.option("--port", "-p", default=8800, type=int, help="Port to bind to")
+@click.option("--upstream", "-u", default="ws://localhost:18789", help="Upstream OpenClaw Gateway URL")
+@click.option("--upstream-token", envvar="OPENCLAW_GATEWAY_TOKEN", help="Upstream gateway token")
+@click.option("--require-acc", is_flag=True, help="Require ACC tokens for all connections")
+@click.option("--audit-db", default="./openclaw-audit.db", help="Audit database path")
+def openclaw_start(host: str, port: int, upstream: str, upstream_token: str, require_acc: bool, audit_db: str):
+    """Start the OpenClaw Gateway proxy."""
+    import asyncio
+    from .dct import DCTLogger
+    from .acc import ACCValidator
+    from .openclaw.proxy import run_proxy
+    
+    console.print(Panel(
+        f"[bold]FDAA OpenClaw Proxy[/bold]\n"
+        f"Listening: [cyan]ws://{host}:{port}[/cyan]\n"
+        f"Upstream: [cyan]{upstream}[/cyan]\n"
+        f"ACC Required: {'Yes' if require_acc else 'No'}",
+        title="🚀 Starting"
+    ))
+    
+    # Initialize components
+    dct_logger = DCTLogger(storage="sqlite", path=audit_db)
+    acc_validator = ACCValidator(dev_mode=True)  # Dev mode for now
+    
+    asyncio.run(run_proxy(
+        host=host,
+        port=port,
+        upstream_url=upstream,
+        upstream_token=upstream_token,
+        acc_validator=acc_validator,
+        dct_logger=dct_logger,
+        require_acc=require_acc,
+    ))
+
+
+@openclaw.command("status")
+@click.option("--port", "-p", default=8800, type=int, help="Proxy port")
+def openclaw_status(port: int):
+    """Check OpenClaw proxy status."""
+    import httpx
+    
+    # The proxy is WebSocket-only for now, just check if port is listening
+    import socket
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    result = sock.connect_ex(('localhost', port))
+    sock.close()
+    
+    if result == 0:
+        console.print(f"[green]✓[/green] OpenClaw proxy listening on port {port}")
+    else:
+        console.print(f"[red]✗[/red] OpenClaw proxy not running on port {port}")
+
+
+# =============================================================================
 # Main
 # =============================================================================
 

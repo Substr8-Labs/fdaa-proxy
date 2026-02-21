@@ -1,8 +1,11 @@
 # FDAA Proxy
 
-**Governed MCP Gateway with Cryptographic Audit Trails**
+**Governed Gateway with Cryptographic Audit Trails**
 
-The FDAA Proxy sits between AI agents and MCP (Model Context Protocol) servers, enforcing governance policies and creating verifiable audit trails.
+The FDAA Proxy provides governance for AI agent runtimes:
+
+1. **OpenClaw Gateway Proxy** — WebSocket proxy for OpenClaw with ACC/DCT
+2. **MCP Server Proxy** — HTTP proxy for MCP servers (legacy)
 
 ```
 Agent → FDAA Proxy → Policy Check → Audit Log → Upstream MCP Server
@@ -23,18 +26,27 @@ Agent → FDAA Proxy → Policy Check → Audit Log → Upstream MCP Server
 
 ## Quick Start
 
+### OpenClaw Gateway Proxy (Primary)
+
 ```bash
 # Install
 pip install fdaa-proxy
 
+# Start the proxy in front of OpenClaw Gateway
+fdaa-proxy openclaw start --upstream ws://localhost:18789
+
+# With ACC token requirement
+fdaa-proxy openclaw start --require-acc --upstream ws://localhost:18789
+```
+
+### MCP Server Proxy (Legacy)
+
+```bash
 # Configure
 fdaa-proxy init
 
-# Start gateway
+# Start MCP gateway
 fdaa-proxy start --config gateway.yaml
-
-# Or via substr8 CLI
-substr8 gateway start
 ```
 
 ## Architecture

@@ -1,8 +1,9 @@
 """
-FDAA Proxy - Governed MCP Gateway with Cryptographic Audit Trails
+FDAA Proxy - Governed Gateway with Cryptographic Audit Trails
 
-The FDAA Proxy sits between AI agents and MCP servers, enforcing governance
-policies and creating verifiable audit trails.
+Two proxy modes:
+1. OpenClaw Gateway Proxy - WebSocket proxy for OpenClaw with ACC/DCT
+2. MCP Server Proxy - HTTP proxy for MCP servers (legacy)
 """
 
 __version__ = "0.1.0"
