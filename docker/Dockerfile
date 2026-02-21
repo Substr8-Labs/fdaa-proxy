@@ -7,8 +7,8 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY fdaa_proxy/ fdaa_proxy/
 
-# Install
-RUN pip install --no-cache-dir .
+# Install with OTEL support
+RUN pip install --no-cache-dir ".[otel]"
 
 # Create data directory for audit logs
 RUN mkdir -p /data

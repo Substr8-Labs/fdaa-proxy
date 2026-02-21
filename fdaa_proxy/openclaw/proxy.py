@@ -34,6 +34,7 @@ from .protocol import (
 )
 from ..acc import ACCValidator, ACCToken
 from ..dct import DCTLogger
+from ..telemetry import init_telemetry, ProxySpan, get_trace_context
 
 logger = logging.getLogger("fdaa-proxy.openclaw")
 
@@ -128,64 +129,75 @@ class OpenClawProxy:
     async def _handle_client(self, websocket: WebSocketServerProtocol):
         """Handle a new client connection."""
         session = ProxySession(client_ws=websocket)
-        session_id = id(websocket)
-        self._sessions[session_id] = session
+        session_id = str(id(websocket))
+        self._sessions[id(websocket)] = session
         
         logger.info(f"Client connected: {session_id}")
         
-        try:
-            # Connect to upstream FIRST (OpenClaw sends challenge immediately)
-            # Set Origin header to match allowedOrigins config
+        # Wrap entire connection in a span
+        with ProxySpan.connection(client_id=session_id, session_id=session_id) as conn_span:
             try:
-                extra_headers = {"Origin": "http://fdaa-proxy:8800"}
-                session.upstream_ws = await websockets.connect(
-                    self.upstream_url,
-                    additional_headers=extra_headers
-                )
-                logger.info(f"Connected to upstream: {self.upstream_url}")
+                # Connect to upstream FIRST (OpenClaw sends challenge immediately)
+                # Set Origin header to match allowedOrigins config
+                with ProxySpan.handshake(client_id=session_id, phase="upstream_connect"):
+                    try:
+                        extra_headers = {"Origin": "http://fdaa-proxy:8800"}
+                        session.upstream_ws = await websockets.connect(
+                            self.upstream_url,
+                            additional_headers=extra_headers
+                        )
+                        logger.info(f"Connected to upstream: {self.upstream_url}")
+                    except Exception as e:
+                        logger.error(f"Failed to connect to upstream: {e}")
+                        conn_span.set_attribute("error", str(e))
+                        await self._send_error(websocket, "0", "UPSTREAM_ERROR", f"Failed to connect: {e}")
+                        return
+                
+                # Receive challenge from upstream and forward to client
+                with ProxySpan.handshake(client_id=session_id, phase="challenge"):
+                    challenge_frame = await session.upstream_ws.recv()
+                    logger.info(f"Received challenge from upstream")
+                    await websocket.send(challenge_frame)
+                
+                # Wait for connect request from client
+                connect_frame = await websocket.recv()
+                
+                try:
+                    frame = Frame.parse(connect_frame)
+                except Exception as e:
+                    logger.error(f"Invalid connect frame: {e}")
+                    await self._send_error(websocket, "0", "INVALID_FRAME", "Invalid frame format")
+                    return
+                
+                # Must be a connect request
+                if not isinstance(frame, Request) or frame.method != "connect":
+                    logger.error(f"Expected connect request, got: {frame.method if isinstance(frame, Request) else frame}")
+                    await self._send_error(websocket, "0", "INVALID_HANDSHAKE", "Expected connect request")
+                    return
+                
+                # Get client_id from connect params for better tracing
+                client_id = frame.params.get("client", {}).get("id", session_id)
+                conn_span.set_attribute("proxy.client_id", client_id)
+                
+                # Process connect (validates ACC, modifies token, forwards)
+                with ProxySpan.handshake(client_id=client_id, phase="connect"):
+                    success = await self._handle_connect(session, frame)
+                    if not success:
+                        return
+                
+                # Start bidirectional forwarding
+                await self._forward_traffic(session)
+                
+            except websockets.exceptions.ConnectionClosed:
+                logger.info(f"Client disconnected: {session_id}")
             except Exception as e:
-                logger.error(f"Failed to connect to upstream: {e}")
-                await self._send_error(websocket, "0", "UPSTREAM_ERROR", f"Failed to connect: {e}")
-                return
-            
-            # Receive challenge from upstream and forward to client
-            challenge_frame = await session.upstream_ws.recv()
-            logger.info(f"Received challenge from upstream")
-            await websocket.send(challenge_frame)
-            
-            # Wait for connect request from client
-            connect_frame = await websocket.recv()
-            
-            try:
-                frame = Frame.parse(connect_frame)
-            except Exception as e:
-                logger.error(f"Invalid connect frame: {e}")
-                await self._send_error(websocket, "0", "INVALID_FRAME", "Invalid frame format")
-                return
-            
-            # Must be a connect request
-            if not isinstance(frame, Request) or frame.method != "connect":
-                logger.error(f"Expected connect request, got: {frame.method if isinstance(frame, Request) else frame}")
-                await self._send_error(websocket, "0", "INVALID_HANDSHAKE", "Expected connect request")
-                return
-            
-            # Process connect (validates ACC, modifies token, forwards)
-            success = await self._handle_connect(session, frame)
-            if not success:
-                return
-            
-            # Start bidirectional forwarding
-            await self._forward_traffic(session)
-            
-        except websockets.exceptions.ConnectionClosed:
-            logger.info(f"Client disconnected: {session_id}")
-        except Exception as e:
-            logger.error(f"Session error: {e}", exc_info=True)
-        finally:
-            # Cleanup
-            if session.upstream_ws:
-                await session.upstream_ws.close()
-            del self._sessions[session_id]
+                logger.error(f"Session error: {e}", exc_info=True)
+                conn_span.record_exception(e)
+            finally:
+                # Cleanup
+                if session.upstream_ws:
+                    await session.upstream_ws.close()
+                del self._sessions[id(websocket)]
     
     async def _handle_connect(self, session: ProxySession, request: Request) -> bool:
         """
@@ -297,31 +309,54 @@ class OpenClawProxy:
                     
                     # Enforce policy on requests
                     if isinstance(frame, Request):
-                        allowed, reason = self._check_request(session, frame)
-                        
-                        if not allowed:
-                            session.requests_blocked += 1
-                            self._log_event(
-                                "request_denied",
-                                client_id=session.client_id,
-                                method=frame.method,
-                                reason=reason,
-                            )
-                            await self._send_error(
-                                session.client_ws,
-                                frame.id,
-                                "POLICY_DENIED",
-                                reason
-                            )
-                            continue
-                        
-                        session.requests_forwarded += 1
-                        self._log_event(
-                            "request_forwarded",
+                        # Wrap request processing in a span
+                        with ProxySpan.request(
                             client_id=session.client_id,
                             method=frame.method,
                             request_id=frame.id,
-                        )
+                        ) as req_span:
+                            # Add trace context for DCT correlation
+                            trace_ctx = get_trace_context()
+                            
+                            # Policy check with span
+                            with ProxySpan.policy_check(
+                                client_id=session.client_id,
+                                method=frame.method,
+                                policy_name="scope_check",
+                            ) as policy_span:
+                                allowed, reason = self._check_request(session, frame)
+                                policy_span.set_attribute("policy.allowed", allowed)
+                                if not allowed:
+                                    policy_span.set_attribute("policy.denial_reason", reason)
+                            
+                            if not allowed:
+                                session.requests_blocked += 1
+                                req_span.set_attribute("proxy.blocked", True)
+                                req_span.set_attribute("proxy.block_reason", reason)
+                                self._log_event(
+                                    "request_denied",
+                                    client_id=session.client_id,
+                                    method=frame.method,
+                                    reason=reason,
+                                    trace_id=trace_ctx.get("trace_id"),
+                                )
+                                await self._send_error(
+                                    session.client_ws,
+                                    frame.id,
+                                    "POLICY_DENIED",
+                                    reason
+                                )
+                                continue
+                            
+                            session.requests_forwarded += 1
+                            req_span.set_attribute("proxy.forwarded", True)
+                            self._log_event(
+                                "request_forwarded",
+                                client_id=session.client_id,
+                                method=frame.method,
+                                request_id=frame.id,
+                                trace_id=trace_ctx.get("trace_id"),
+                            )
                     
                     # Forward to upstream
                     await session.upstream_ws.send(message)
@@ -414,8 +449,18 @@ async def run_proxy(
     acc_validator: Optional[ACCValidator] = None,
     dct_logger: Optional[DCTLogger] = None,
     require_acc: bool = False,
+    enable_telemetry: bool = True,
 ):
     """Run the OpenClaw proxy server."""
+    
+    # Initialize telemetry if enabled
+    if enable_telemetry:
+        otel_ready = init_telemetry()
+        if otel_ready:
+            logger.info("OpenTelemetry telemetry enabled")
+        else:
+            logger.info("OpenTelemetry not available (install with: pip install fdaa-proxy[otel])")
+    
     proxy = OpenClawProxy(
         upstream_url=upstream_url,
         upstream_token=upstream_token,
