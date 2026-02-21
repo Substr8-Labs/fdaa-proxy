@@ -473,6 +473,137 @@ def approvals_deny(gateway_id: str, request_id: str, by: str, port: int):
 
 
 # =============================================================================
+# ACC (Agent Capability Certificate) Commands
+# =============================================================================
+
+@cli.group()
+def acc():
+    """ACC key and token management."""
+    pass
+
+
+@acc.command("keygen")
+@click.option("--output", "-o", default="./acc-keys", help="Output directory for keys")
+@click.option("--key-id", help="Custom key ID (auto-generated if not provided)")
+def acc_keygen(output: str, key_id: str):
+    """Generate a new ACC ED25519 key pair."""
+    try:
+        from .acc import generate_keypair, HAS_CRYPTO
+        
+        if not HAS_CRYPTO:
+            console.print("[red]✗[/red] cryptography library required for key generation")
+            console.print("Install with: pip install cryptography")
+            sys.exit(1)
+        
+        key_pair = generate_keypair(Path(output))
+        
+        console.print(Panel(
+            f"[bold green]Key pair generated![/bold green]\n\n"
+            f"Key ID: [cyan]{key_pair.key_id}[/cyan]\n"
+            f"DID: [dim]{key_pair.did}[/dim]\n"
+            f"Public Key (b64): [dim]{key_pair.public_key_b64}[/dim]\n\n"
+            f"Saved to: [cyan]{output}/[/cyan]",
+            title="🔐 ACC Key Generation"
+        ))
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed: {e}")
+        sys.exit(1)
+
+
+@acc.command("sign")
+@click.option("--key-path", "-k", required=True, help="Path to key directory")
+@click.option("--subject", "-s", required=True, help="Token subject (e.g., agent:ada)")
+@click.option("--capabilities", "-c", multiple=True, required=True, help="Capabilities to grant")
+@click.option("--expires-in", "-e", default=3600, type=int, help="Expiration in seconds")
+@click.option("--issuer", "-i", default="https://acc.substr8labs.com", help="Issuer URL")
+def acc_sign(key_path: str, subject: str, capabilities: tuple, expires_in: int, issuer: str):
+    """Create a signed ACC token."""
+    try:
+        from .acc import ACCKeyPair, ACCSigner, HAS_CRYPTO
+        
+        if not HAS_CRYPTO:
+            console.print("[red]✗[/red] cryptography library required")
+            sys.exit(1)
+        
+        key_pair = ACCKeyPair.load(Path(key_path))
+        signer = ACCSigner(key_pair)
+        
+        token = signer.create_token(
+            subject=subject,
+            capabilities=list(capabilities),
+            issuer=issuer,
+            expires_in_seconds=expires_in,
+        )
+        
+        console.print(Panel(
+            f"[bold green]Token created![/bold green]\n\n"
+            f"Subject: [cyan]{subject}[/cyan]\n"
+            f"Capabilities: [cyan]{', '.join(capabilities)}[/cyan]\n"
+            f"Expires in: {expires_in}s\n\n"
+            f"[dim]Token:[/dim]\n{token}",
+            title="🎫 ACC Token"
+        ))
+        
+        # Also print just the token for piping
+        console.print(f"\n[dim]Raw token:[/dim]")
+        print(token)
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed: {e}")
+        sys.exit(1)
+
+
+@acc.command("verify")
+@click.argument("token")
+@click.option("--key-path", "-k", help="Path to public key")
+@click.option("--public-key", "-p", help="Base64-encoded public key")
+def acc_verify(token: str, key_path: str, public_key: str):
+    """Verify an ACC token signature."""
+    try:
+        from .acc import ACCVerifier, HAS_CRYPTO
+        import base64
+        
+        if not HAS_CRYPTO:
+            console.print("[red]✗[/red] cryptography library required")
+            sys.exit(1)
+        
+        # Load public key
+        pub_key_bytes = None
+        if key_path:
+            key_file = Path(key_path)
+            if key_file.is_dir():
+                key_file = key_file / "public.key"
+            with open(key_file, "rb") as f:
+                pub_key_bytes = f.read()
+        elif public_key:
+            pub_key_bytes = base64.urlsafe_b64decode(public_key + "==")
+        else:
+            console.print("[yellow]⚠[/yellow] No public key provided, will try to verify from embedded key ID")
+        
+        verifier = ACCVerifier(pub_key_bytes)
+        valid, payload, error = verifier.verify(token)
+        
+        if valid:
+            console.print(Panel(
+                f"[bold green]✓ Token valid![/bold green]\n\n"
+                f"Token ID: [cyan]{payload.get('token_id')}[/cyan]\n"
+                f"Subject: [cyan]{payload.get('subject')}[/cyan]\n"
+                f"Issuer: {payload.get('issuer')}\n"
+                f"Capabilities: {', '.join(payload.get('capabilities', []))}\n"
+                f"Expires: {payload.get('expires_at')}",
+                title="🔐 ACC Verification"
+            ))
+        else:
+            console.print(f"[red]✗[/red] Invalid: {error}")
+            sys.exit(1)
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed: {e}")
+        sys.exit(1)
+
+
+# =============================================================================
 # OpenClaw Proxy Commands
 # =============================================================================
 
