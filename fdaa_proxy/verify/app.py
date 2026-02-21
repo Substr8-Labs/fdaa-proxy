@@ -87,7 +87,7 @@ def load_dct_entries() -> List[Dict[str, Any]]:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, timestamp, event_type, gateway_id, entry_hash as hash, prev_hash,
+                SELECT id, timestamp, event_type, gateway_id, entry_hash, prev_hash,
                        tool, arguments, result, error, persona, role, reasoning, acc_token_id
                 FROM dct_entries
                 ORDER BY timestamp DESC
@@ -95,6 +95,9 @@ def load_dct_entries() -> List[Dict[str, Any]]:
             """)
             for row in cursor.fetchall():
                 entry = dict(row)
+                # Rename entry_hash to hash for consistency
+                if "entry_hash" in entry:
+                    entry["hash"] = entry.pop("entry_hash")
                 # Parse JSON fields
                 if entry.get("arguments"):
                     try:
@@ -169,69 +172,230 @@ def verify_chain(entries: List[Dict[str, Any]]) -> VerificationResult:
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    """Verification UI home page."""
+    """Verification UI home page with chain graph."""
     return """
     <!DOCTYPE html>
     <html>
     <head>
         <title>FDAA Verification</title>
         <style>
+            * { box-sizing: border-box; }
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: #0d1117; color: #c9d1d9; }
-            .container { max-width: 1200px; margin: 0 auto; }
-            h1 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 10px; }
-            h2 { color: #8b949e; margin-top: 30px; }
-            .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin: 10px 0; }
-            .status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+            .container { max-width: 1400px; margin: 0 auto; }
+            h1 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+            h2 { color: #8b949e; margin-top: 20px; margin-bottom: 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+            .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+            .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; }
+            .card.full { grid-column: 1 / -1; }
+            .status { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
             .status.valid { background: #238636; color: white; }
             .status.invalid { background: #da3633; color: white; }
-            .entry { border-left: 3px solid #58a6ff; padding-left: 12px; margin: 10px 0; }
-            .hash { font-family: monospace; font-size: 12px; color: #8b949e; }
+            .status-bar { display: flex; align-items: center; gap: 20px; margin-bottom: 16px; }
+            .stat { text-align: center; padding: 8px 16px; background: #0d1117; border-radius: 6px; }
+            .stat-value { font-size: 24px; font-weight: 700; color: #58a6ff; }
+            .stat-label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+            .hash { font-family: 'SF Mono', Monaco, monospace; font-size: 11px; color: #8b949e; }
             .trace-link { color: #58a6ff; text-decoration: none; }
             .trace-link:hover { text-decoration: underline; }
-            table { width: 100%; border-collapse: collapse; }
-            th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #30363d; }
-            th { color: #8b949e; font-weight: 600; }
-            .btn { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
-            .btn:hover { background: #2ea043; }
-            #entries { max-height: 500px; overflow-y: auto; }
+            table { width: 100%; border-collapse: collapse; font-size: 13px; }
+            th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #21262d; }
+            th { color: #8b949e; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+            tr:hover { background: #1c2128; }
+            .scroll-table { max-height: 300px; overflow-y: auto; }
+            
+            /* Chain Graph Styles */
+            #chain-graph { height: 200px; overflow-x: auto; overflow-y: hidden; white-space: nowrap; padding: 20px 0; }
+            .chain-node { display: inline-flex; flex-direction: column; align-items: center; margin: 0 5px; cursor: pointer; transition: transform 0.2s; }
+            .chain-node:hover { transform: scale(1.1); }
+            .chain-node.selected { transform: scale(1.15); }
+            .node-circle { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: white; position: relative; }
+            .node-circle.connect { background: #238636; }
+            .node-circle.request { background: #1f6feb; }
+            .node-circle.response { background: #8957e5; }
+            .node-circle.error { background: #da3633; }
+            .node-circle.default { background: #30363d; }
+            .node-time { font-size: 10px; color: #8b949e; margin-top: 4px; }
+            .node-hash { font-size: 9px; color: #484f58; font-family: monospace; }
+            .chain-arrow { display: inline-block; color: #30363d; font-size: 20px; vertical-align: middle; margin: 0 -2px; }
+            
+            /* Detail Panel */
+            #detail-panel { display: none; margin-top: 16px; padding: 16px; background: #0d1117; border-radius: 6px; border: 1px solid #30363d; }
+            #detail-panel.active { display: block; }
+            .detail-row { display: flex; margin: 8px 0; }
+            .detail-label { width: 120px; color: #8b949e; font-size: 12px; }
+            .detail-value { flex: 1; font-family: monospace; font-size: 12px; word-break: break-all; }
+            .detail-json { background: #0d1117; padding: 12px; border-radius: 4px; font-size: 11px; max-height: 150px; overflow: auto; }
+            
+            /* Tabs */
+            .tabs { display: flex; gap: 2px; margin-bottom: 16px; }
+            .tab { padding: 8px 16px; background: #21262d; border: none; color: #8b949e; cursor: pointer; font-size: 13px; border-radius: 6px 6px 0 0; }
+            .tab.active { background: #30363d; color: #c9d1d9; }
+            .tab-content { display: none; }
+            .tab-content.active { display: block; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔐 FDAA Verification</h1>
+            <h1>🔐 FDAA Verification <span id="chain-status"></span></h1>
             
-            <div class="card">
-                <h2>Chain Status</h2>
-                <div id="status">Loading...</div>
+            <div class="status-bar">
+                <div class="stat">
+                    <div class="stat-value" id="stat-entries">-</div>
+                    <div class="stat-label">Entries</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="stat-traces">-</div>
+                    <div class="stat-label">Traces</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="stat-last">-</div>
+                    <div class="stat-label">Last Event</div>
+                </div>
             </div>
             
-            <div class="card">
-                <h2>Recent Traces</h2>
-                <div id="traces">Loading...</div>
+            <div class="card full">
+                <h2>🔗 Hash Chain</h2>
+                <div id="chain-graph">Loading chain...</div>
+                <div id="detail-panel">
+                    <div class="detail-row">
+                        <span class="detail-label">Entry ID</span>
+                        <span class="detail-value" id="detail-id">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Timestamp</span>
+                        <span class="detail-value" id="detail-time">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Event Type</span>
+                        <span class="detail-value" id="detail-event">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Hash</span>
+                        <span class="detail-value" id="detail-hash">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Prev Hash</span>
+                        <span class="detail-value" id="detail-prev">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Trace ID</span>
+                        <span class="detail-value" id="detail-trace">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Arguments</span>
+                        <pre class="detail-json" id="detail-args">-</pre>
+                    </div>
+                </div>
             </div>
             
-            <div class="card">
-                <h2>Audit Entries</h2>
-                <div id="entries">Loading...</div>
+            <div class="grid">
+                <div class="card">
+                    <h2>📊 Recent Traces</h2>
+                    <div class="scroll-table" id="traces">Loading...</div>
+                </div>
+                
+                <div class="card">
+                    <h2>📝 Audit Log</h2>
+                    <div class="scroll-table" id="entries">Loading...</div>
+                </div>
             </div>
         </div>
         
         <script>
             const JAEGER_URL = '""" + JAEGER_URL + """';
+            let chainData = [];
+            let selectedNode = null;
+            
+            function getEventColor(eventType) {
+                if (eventType.includes('connect')) return 'connect';
+                if (eventType.includes('request')) return 'request';
+                if (eventType.includes('response')) return 'response';
+                if (eventType.includes('error') || eventType.includes('denied')) return 'error';
+                return 'default';
+            }
+            
+            function getEventIcon(eventType) {
+                if (eventType.includes('connect')) return '🔌';
+                if (eventType.includes('request')) return '→';
+                if (eventType.includes('response')) return '←';
+                if (eventType.includes('denied')) return '🚫';
+                return '•';
+            }
+            
+            function renderChain(entries) {
+                chainData = entries;
+                const sorted = [...entries].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+                const recent = sorted.slice(-30); // Show last 30 entries
+                
+                let html = '';
+                recent.forEach((entry, i) => {
+                    const color = getEventColor(entry.event_type);
+                    const icon = getEventIcon(entry.event_type);
+                    const time = new Date(entry.timestamp).toLocaleTimeString();
+                    const hash = entry.hash?.slice(0, 6) || '?';
+                    
+                    if (i > 0) {
+                        html += '<span class="chain-arrow">→</span>';
+                    }
+                    
+                    html += `
+                        <div class="chain-node" data-index="${entries.indexOf(entry)}" onclick="selectNode(${entries.indexOf(entry)})">
+                            <div class="node-circle ${color}">${icon}</div>
+                            <div class="node-time">${time}</div>
+                            <div class="node-hash">${hash}</div>
+                        </div>
+                    `;
+                });
+                
+                document.getElementById('chain-graph').innerHTML = html || '<p style="color:#8b949e">No chain entries yet</p>';
+                
+                // Scroll to end
+                const graph = document.getElementById('chain-graph');
+                graph.scrollLeft = graph.scrollWidth;
+            }
+            
+            function selectNode(index) {
+                const entry = chainData[index];
+                if (!entry) return;
+                
+                // Update selection
+                document.querySelectorAll('.chain-node').forEach(n => n.classList.remove('selected'));
+                document.querySelector(`.chain-node[data-index="${index}"]`)?.classList.add('selected');
+                
+                // Show detail panel
+                const panel = document.getElementById('detail-panel');
+                panel.classList.add('active');
+                
+                document.getElementById('detail-id').textContent = entry.id || '-';
+                document.getElementById('detail-time').textContent = entry.timestamp || '-';
+                document.getElementById('detail-event').textContent = entry.event_type || '-';
+                document.getElementById('detail-hash').textContent = entry.hash || '-';
+                document.getElementById('detail-prev').textContent = entry.prev_hash || '(genesis)';
+                
+                const traceId = entry.arguments?.trace_id;
+                if (traceId) {
+                    document.getElementById('detail-trace').innerHTML = 
+                        `<a class="trace-link" href="${JAEGER_URL}/trace/${traceId}" target="_blank">${traceId}</a>`;
+                } else {
+                    document.getElementById('detail-trace').textContent = '-';
+                }
+                
+                document.getElementById('detail-args').textContent = 
+                    entry.arguments ? JSON.stringify(entry.arguments, null, 2) : '-';
+            }
             
             async function loadStatus() {
                 try {
                     const res = await fetch('/api/verify');
                     const data = await res.json();
-                    document.getElementById('status').innerHTML = `
+                    document.getElementById('chain-status').innerHTML = `
                         <span class="status ${data.valid ? 'valid' : 'invalid'}">
-                            ${data.valid ? '✓ VALID' : '✗ INVALID'}
+                            ${data.valid ? '✓ Chain Valid' : '✗ Chain Broken'}
                         </span>
-                        <p>Entries checked: ${data.entries_checked}</p>
-                        ${data.errors.length ? '<p style="color:#da3633">Errors: ' + data.errors.join(', ') + '</p>' : ''}
                     `;
+                    document.getElementById('stat-entries').textContent = data.entries_checked;
                 } catch (e) {
-                    document.getElementById('status').innerHTML = '<p>Error loading status</p>';
+                    document.getElementById('chain-status').innerHTML = '<span class="status invalid">Error</span>';
                 }
             }
             
@@ -239,64 +403,77 @@ async def home():
                 try {
                     const res = await fetch('/api/traces?limit=10');
                     const data = await res.json();
+                    document.getElementById('stat-traces').textContent = data.traces?.length || 0;
+                    
                     if (data.traces && data.traces.length) {
                         document.getElementById('traces').innerHTML = `
                             <table>
-                                <tr><th>Trace ID</th><th>Operation</th><th>Duration</th><th>Spans</th><th>Link</th></tr>
+                                <tr><th>Trace</th><th>Op</th><th>Duration</th><th></th></tr>
                                 ${data.traces.map(t => `
                                     <tr>
-                                        <td class="hash">${t.trace_id.slice(0,16)}...</td>
+                                        <td class="hash">${t.trace_id.slice(0,12)}...</td>
                                         <td>${t.operation}</td>
-                                        <td>${t.duration_ms.toFixed(1)}ms</td>
-                                        <td>${t.spans}</td>
-                                        <td><a class="trace-link" href="${JAEGER_URL}/trace/${t.trace_id}" target="_blank">View →</a></td>
+                                        <td>${t.duration_ms.toFixed(0)}ms</td>
+                                        <td><a class="trace-link" href="${JAEGER_URL}/trace/${t.trace_id}" target="_blank">→</a></td>
                                     </tr>
                                 `).join('')}
                             </table>
                         `;
                     } else {
-                        document.getElementById('traces').innerHTML = '<p>No traces found</p>';
+                        document.getElementById('traces').innerHTML = '<p style="color:#8b949e">No traces</p>';
                     }
                 } catch (e) {
-                    document.getElementById('traces').innerHTML = '<p>Error loading traces</p>';
+                    document.getElementById('traces').innerHTML = '<p style="color:#da3633">Error loading</p>';
                 }
             }
             
             async function loadEntries() {
                 try {
-                    const res = await fetch('/api/entries?limit=20');
+                    const res = await fetch('/api/entries?limit=100');
                     const data = await res.json();
+                    
                     if (data.entries && data.entries.length) {
+                        // Update last event time
+                        const lastTime = new Date(data.entries[0].timestamp);
+                        const now = new Date();
+                        const diffSec = Math.floor((now - lastTime) / 1000);
+                        document.getElementById('stat-last').textContent = 
+                            diffSec < 60 ? `${diffSec}s ago` : 
+                            diffSec < 3600 ? `${Math.floor(diffSec/60)}m ago` : 
+                            `${Math.floor(diffSec/3600)}h ago`;
+                        
+                        // Render chain graph
+                        renderChain(data.entries);
+                        
+                        // Render table (last 20)
                         document.getElementById('entries').innerHTML = `
                             <table>
-                                <tr><th>Time</th><th>Event</th><th>Client</th><th>Hash</th><th>Trace</th></tr>
-                                ${data.entries.map(e => `
-                                    <tr>
+                                <tr><th>Time</th><th>Event</th><th>Hash</th></tr>
+                                ${data.entries.slice(0, 20).map((e, i) => `
+                                    <tr onclick="selectNode(${i})" style="cursor:pointer">
                                         <td>${new Date(e.timestamp).toLocaleTimeString()}</td>
                                         <td>${e.event_type}</td>
-                                        <td>${e.arguments?.client_id || '-'}</td>
-                                        <td class="hash">${e.hash?.slice(0,12) || '-'}...</td>
-                                        <td>${e.arguments?.trace_id ? 
-                                            `<a class="trace-link" href="${JAEGER_URL}/trace/${e.arguments.trace_id}" target="_blank">${e.arguments.trace_id.slice(0,8)}...</a>` 
-                                            : '-'}</td>
+                                        <td class="hash">${e.hash?.slice(0,8) || '-'}...</td>
                                     </tr>
                                 `).join('')}
                             </table>
                         `;
                     } else {
-                        document.getElementById('entries').innerHTML = '<p>No entries yet</p>';
+                        document.getElementById('entries').innerHTML = '<p style="color:#8b949e">No entries</p>';
+                        document.getElementById('chain-graph').innerHTML = '<p style="color:#8b949e">No chain entries yet</p>';
                     }
                 } catch (e) {
-                    document.getElementById('entries').innerHTML = '<p>Error loading entries</p>';
+                    document.getElementById('entries').innerHTML = '<p style="color:#da3633">Error loading</p>';
                 }
             }
             
+            // Initial load
             loadStatus();
             loadTraces();
             loadEntries();
             
-            // Refresh every 10s
-            setInterval(() => { loadStatus(); loadTraces(); loadEntries(); }, 10000);
+            // Refresh every 5s
+            setInterval(() => { loadStatus(); loadTraces(); loadEntries(); }, 5000);
         </script>
     </body>
     </html>
