@@ -1,0 +1,25 @@
+version: "3.8"
+
+# Jaeger All-in-One for trace visualization
+# Deploy alongside FDAA Proxy stack
+
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    networks:
+      - towerhq-gateways
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+networks:
+  towerhq-gateways:
+    external: true
