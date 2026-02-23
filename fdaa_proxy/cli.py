@@ -915,6 +915,45 @@ def verify_check(dct_path: str):
 
 
 # =============================================================================
+# LLM Proxy Commands
+# =============================================================================
+
+@cli.group()
+def llm():
+    """LLM API proxy commands (Anthropic-compatible)."""
+    pass
+
+
+@llm.command("start")
+@click.option("--host", "-h", default="0.0.0.0", help="Host to bind to")
+@click.option("--port", "-p", default=8080, type=int, help="Port to bind to")
+@click.option("--upstream", "-u", required=True, help="Upstream LLM API URL")
+@click.option("--upstream-auth", help="Upstream auth token (Bearer)")
+@click.option("--acc-enabled", is_flag=True, help="Require ACC tokens")
+@click.option("--dct-path", default="/data/audit/dct.jsonl", help="DCT log path")
+def llm_start(host: str, port: int, upstream: str, upstream_auth: str, acc_enabled: bool, dct_path: str):
+    """Start LLM API proxy."""
+    from .llm.proxy import LLMProxy
+    
+    console.print(Panel(
+        f"[bold]FDAA LLM Proxy[/bold]\n"
+        f"Upstream: [cyan]{upstream}[/cyan]\n"
+        f"Listening: [cyan]http://{host}:{port}[/cyan]\n"
+        f"ACC: {'✓ enabled' if acc_enabled else '✗ disabled'}\n"
+        f"DCT: [cyan]{dct_path}[/cyan]",
+        title="🚀 Starting"
+    ))
+    
+    proxy = LLMProxy(
+        upstream_url=upstream,
+        upstream_auth=upstream_auth,
+        acc_enabled=acc_enabled,
+        dct_path=dct_path,
+    )
+    proxy.run(host=host, port=port)
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
