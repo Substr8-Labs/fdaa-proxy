@@ -930,17 +930,34 @@ def llm():
 @click.option("--upstream", "-u", required=True, help="Upstream LLM API URL")
 @click.option("--upstream-auth", help="Upstream auth token (Bearer)")
 @click.option("--acc-enabled", is_flag=True, help="Require ACC tokens")
+@click.option("--acc-public-key", help="Path to ACC public key for verification")
+@click.option("--acc-dev-mode", is_flag=True, help="ACC dev mode (skip crypto)")
 @click.option("--dct-path", default="/data/audit/dct.jsonl", help="DCT log path")
-def llm_start(host: str, port: int, upstream: str, upstream_auth: str, acc_enabled: bool, dct_path: str):
-    """Start LLM API proxy."""
+@click.option("--gam-enabled", is_flag=True, help="Enable GAM git commits")
+@click.option("--gam-repo-path", help="Path to GAM git repository")
+def llm_start(
+    host: str, 
+    port: int, 
+    upstream: str, 
+    upstream_auth: str, 
+    acc_enabled: bool,
+    acc_public_key: str,
+    acc_dev_mode: bool,
+    dct_path: str,
+    gam_enabled: bool,
+    gam_repo_path: str,
+):
+    """Start LLM API proxy with full FDAA platform services."""
     from .llm.proxy import LLMProxy
     
     console.print(Panel(
         f"[bold]FDAA LLM Proxy[/bold]\n"
         f"Upstream: [cyan]{upstream}[/cyan]\n"
-        f"Listening: [cyan]http://{host}:{port}[/cyan]\n"
-        f"ACC: {'✓ enabled' if acc_enabled else '✗ disabled'}\n"
-        f"DCT: [cyan]{dct_path}[/cyan]",
+        f"Listening: [cyan]http://{host}:{port}[/cyan]\n\n"
+        f"[bold]Platform Services:[/bold]\n"
+        f"  ACC: {'✓ enabled' + (' (dev mode)' if acc_dev_mode else '') if acc_enabled else '✗ disabled'}\n"
+        f"  DCT: [cyan]{dct_path}[/cyan]\n"
+        f"  GAM: {'✓ ' + (gam_repo_path or 'enabled') if gam_enabled else '✗ disabled'}",
         title="🚀 Starting"
     ))
     
@@ -948,7 +965,11 @@ def llm_start(host: str, port: int, upstream: str, upstream_auth: str, acc_enabl
         upstream_url=upstream,
         upstream_auth=upstream_auth,
         acc_enabled=acc_enabled,
+        acc_public_key_path=acc_public_key,
+        acc_dev_mode=acc_dev_mode,
         dct_path=dct_path,
+        gam_enabled=gam_enabled,
+        gam_repo_path=gam_repo_path,
     )
     proxy.run(host=host, port=port)
 
