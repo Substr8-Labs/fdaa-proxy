@@ -1,33 +1,35 @@
-# TowerHQ FDAA Proxy Stack
+# TowerHQ FDAA Proxy Stack - STAGING
 # 
-# Full FDAA infrastructure with ACC cryptographic auth
+# Isolated staging environment - test here before prod
 #
-# Deploy: docker stack deploy -c towerhq-stack.yml towerhq
+# Deploy: docker stack deploy -c towerhq-staging-stack.yml towerhq-staging
 
 version: "3.8"
 
 networks:
-  towerhq-gateways:
-    external: true
+  towerhq-staging:
+    driver: overlay
+    attachable: true
 
 volumes:
-  fdaa-data:
-  acc-keys:
+  fdaa-data-staging:
+  acc-keys-staging:
 
 configs:
-  acc-public-key:
+  acc-public-key-staging:
     file: /home/node/.openclaw/secrets/acc-keys/public.key
-  shared-gateway-auth:
+  shared-gateway-auth-staging:
     external: true
+    name: shared-gateway-auth  # Reuse same auth config
 
 secrets:
-  acc-private-key:
+  acc-private-key-staging:
     file: /home/node/.openclaw/secrets/acc-keys/private.key
 
 services:
   # FDAA Proxy - Governed OpenClaw Gateway
   fdaa-proxy:
-    image: fdaa-proxy:latest
+    image: fdaa-proxy:staging
     command:
       - fdaa-proxy
       - openclaw
@@ -39,16 +41,16 @@ services:
       - --acc-key=/run/configs/public.key
       - --acc-issuer=https://acc.substr8labs.com
     environment:
-      - OPENCLAW_GATEWAY_TOKEN=towerhq-internal-token-2026
+      - OPENCLAW_GATEWAY_TOKEN=towerhq-staging-token-2026
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
-      - OTEL_SERVICE_NAME=fdaa-proxy
+      - OTEL_SERVICE_NAME=fdaa-proxy-staging
     configs:
-      - source: acc-public-key
+      - source: acc-public-key-staging
         target: /run/configs/public.key
     volumes:
-      - fdaa-data:/data
+      - fdaa-data-staging:/data
     networks:
-      - towerhq-gateways
+      - towerhq-staging
     deploy:
       mode: replicated
       replicas: 1
@@ -60,16 +62,16 @@ services:
 
   # Shared OpenClaw Gateway (upstream)
   shared-gateway:
-    image: towerhq/gateway-shared:v9
+    image: towerhq/gateway-shared:staging
     ports:
-      - "19000:18789"
+      - "19001:18789"  # STAGING: 19001 instead of 19000
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     configs:
-      - source: shared-gateway-auth
+      - source: shared-gateway-auth-staging
         target: /runtime-state/agents/main/agent/auth-profiles.json
     networks:
-      - towerhq-gateways
+      - towerhq-staging
     deploy:
       mode: replicated
       replicas: 1
@@ -81,16 +83,16 @@ services:
 
   # HTTP Bridge - REST to WebSocket
   bridge:
-    image: towerhq/bridge:v17
+    image: towerhq/bridge:staging
     ports:
-      - "3100:3100"
+      - "13100:3100"  # STAGING: 13100 instead of 3100
     environment:
       - BRIDGE_PORT=3100
       - BRIDGE_SECRET=${BRIDGE_SECRET}
       - GATEWAY_URL=ws://fdaa-proxy:8800
-      - GATEWAY_TOKEN=towerhq-internal-token-2026
+      - GATEWAY_TOKEN=towerhq-staging-token-2026
     networks:
-      - towerhq-gateways
+      - towerhq-staging
     deploy:
       mode: replicated
       replicas: 1
@@ -100,24 +102,20 @@ services:
       timeout: 5s
       retries: 3
 
-  # Jaeger Tracing
-  jaeger:
-    image: jaegertracing/all-in-one:1.54
-    ports:
-      - "16686:16686"  # UI
-      - "4317:4317"    # OTLP gRPC
-      - "4318:4318"    # OTLP HTTP
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-    networks:
-      - towerhq-gateways
-    deploy:
-      mode: replicated
-      replicas: 1
+  # Jaeger Tracing (staging shares with prod to save resources)
+  # Comment out if you want isolated tracing
+  # jaeger:
+  #   image: jaegertracing/all-in-one:1.54
+  #   ports:
+  #     - "16687:16686"  # STAGING: 16687 instead of 16686
+  #   environment:
+  #     - COLLECTOR_OTLP_ENABLED=true
+  #   networks:
+  #     - towerhq-staging
 
   # Verification UI
   verify:
-    image: fdaa-proxy:latest
+    image: fdaa-proxy:staging
     command:
       - fdaa-proxy
       - verify
@@ -127,11 +125,11 @@ services:
       - --jaeger-url=http://jaeger:16686
       - --dct-path=/data
     ports:
-      - "8080:8080"
+      - "18080:8080"  # STAGING: 18080 instead of 8080
     volumes:
-      - fdaa-data:/data:ro
+      - fdaa-data-staging:/data:ro
     networks:
-      - towerhq-gateways
+      - towerhq-staging
     deploy:
       mode: replicated
       replicas: 1
