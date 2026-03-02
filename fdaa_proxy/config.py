@@ -42,6 +42,15 @@ class DCTConfig:
     postgres_uri: Optional[str] = None
 
 
+@dataclass
+class AgentRegistryConfig:
+    """Agent Registry configuration."""
+    enabled: bool = True
+    db_path: str = "./data/agents.db"
+    openclaw_url: str = "http://localhost:18789"
+    openclaw_password: Optional[str] = None
+
+
 @dataclass  
 class ToolPolicyConfig:
     """Policy for a single tool."""
@@ -80,6 +89,7 @@ class ProxyConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     acc: ACCConfig = field(default_factory=ACCConfig)
     dct: DCTConfig = field(default_factory=DCTConfig)
+    agents: AgentRegistryConfig = field(default_factory=AgentRegistryConfig)
     gateways: List[GatewayConfig] = field(default_factory=list)
 
 

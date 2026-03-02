@@ -20,6 +20,8 @@ from .pool import GatewayPool
 from .mcp import MCPPolicy
 from .dct import DCTLogger
 from .acc import ACCValidator
+from .agents import AgentRegistry, AgentStorage
+from .agents.routes import create_agent_router, create_spawn_router
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -149,6 +151,19 @@ def create_app(config: ProxyConfig = None) -> FastAPI:
     app.state.acc_validator = acc_validator
     app.state.config = config
     
+    # Initialize Agent Registry
+    agents_db_path = os.environ.get("FDAA_AGENTS_DB", "./data/agents.db")
+    openclaw_url = os.environ.get("OPENCLAW_URL", "http://localhost:18789")
+    openclaw_password = os.environ.get("OPENCLAW_PASSWORD", "")
+    
+    agent_storage = AgentStorage(db_path=agents_db_path)
+    agent_registry = AgentRegistry(
+        storage=agent_storage,
+        openclaw_url=openclaw_url,
+        openclaw_password=openclaw_password,
+    )
+    app.state.agent_registry = agent_registry
+    
     # CORS
     app.add_middleware(
         CORSMiddleware,
@@ -158,6 +173,10 @@ def create_app(config: ProxyConfig = None) -> FastAPI:
         allow_headers=["*"],
     )
     
+    # Include Agent Registry routes
+    app.include_router(create_agent_router(agent_registry))
+    app.include_router(create_spawn_router(agent_registry))
+    
     # =========================================================================
     # Routes
     # =========================================================================
@@ -165,13 +184,19 @@ def create_app(config: ProxyConfig = None) -> FastAPI:
     @app.get("/")
     async def root():
         """Health check and service info."""
+        agent_stats = agent_registry.stats()
         return {
             "service": "FDAA Proxy",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "status": "running",
             "gateways": pool.gateway_count,
             "acc_enabled": acc_validator is not None,
             "dct_enabled": dct_logger is not None,
+            "agent_registry": {
+                "enabled": True,
+                "agents": agent_stats.get("agents", 0),
+                "spawns": agent_stats.get("spawns_total", 0),
+            },
         }
     
     @app.get("/health")
