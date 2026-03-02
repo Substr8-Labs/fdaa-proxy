@@ -14,6 +14,7 @@ networks:
 volumes:
   fdaa-data-staging:
   acc-keys-staging:
+  staging-gateway-state:
 
 configs:
   acc-public-key-staging:
@@ -27,6 +28,33 @@ secrets:
     file: /home/node/.openclaw/secrets/acc-keys/private.key
 
 services:
+  # FDAA API - Agent Registry + REST endpoints
+  fdaa-api:
+    image: fdaa-proxy:staging
+    command:
+      - fdaa-proxy
+      - start
+      - --host=0.0.0.0
+      - --port=8766
+    ports:
+      - "18766:8766"  # STAGING: Exposed for TowerHQ access
+    environment:
+      - FDAA_AGENTS_DB=/data/agents.db
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_SERVICE_NAME=fdaa-api-staging
+    volumes:
+      - fdaa-data-staging:/data
+    networks:
+      - towerhq-staging
+    deploy:
+      mode: replicated
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost',8766)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # FDAA Proxy - Governed OpenClaw Gateway
   fdaa-proxy:
     image: fdaa-proxy:staging
@@ -70,6 +98,8 @@ services:
     configs:
       - source: shared-gateway-auth-staging
         target: /runtime-state/agents/main/agent/auth-profiles.json
+    volumes:
+      - staging-gateway-state:/runtime-state
     networks:
       - towerhq-staging
     deploy:
