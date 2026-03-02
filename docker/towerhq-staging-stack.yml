@@ -95,6 +95,7 @@ services:
       - "19001:18789"  # STAGING: 19001 instead of 19000
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GATEWAY_TOKEN=towerhq-staging-token-2026
     configs:
       - source: shared-gateway-auth-staging
         target: /runtime-state/agents/main/agent/auth-profiles.json
