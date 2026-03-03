@@ -22,6 +22,7 @@ from .dct import DCTLogger
 from .acc import ACCValidator
 from .agents import AgentRegistry, AgentStorage
 from .agents.routes import create_agent_router, create_spawn_router
+from .governance import GovernanceLayer, GovernanceContext, govern_tool_call, create_governance_layer
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -151,6 +152,19 @@ def create_app(config: ProxyConfig = None) -> FastAPI:
     app.state.acc_validator = acc_validator
     app.state.config = config
     
+    # Initialize Governance Layer (ACC + DCT with substr8 schemas)
+    governance_enabled = os.environ.get("FDAA_GOVERNANCE", "true").lower() == "true"
+    governance_ledger_path = os.environ.get("FDAA_DCT_LEDGER", "./data/dct_ledger.sqlite")
+    
+    governance = None
+    if governance_enabled:
+        governance = create_governance_layer(
+            ledger_path=governance_ledger_path,
+            acc_enabled=True,
+            dct_enabled=True,
+        )
+        logger.info("Governance layer initialized (ACC + DCT with substr8 schemas)")
+    
     # Initialize Agent Registry
     agents_db_path = os.environ.get("FDAA_AGENTS_DB", "./data/agents.db")
     openclaw_url = os.environ.get("OPENCLAW_URL", "http://localhost:18789")
@@ -163,6 +177,7 @@ def create_app(config: ProxyConfig = None) -> FastAPI:
         openclaw_password=openclaw_password,
     )
     app.state.agent_registry = agent_registry
+    app.state.governance = governance
     
     # CORS
     app.add_middleware(
@@ -176,6 +191,128 @@ def create_app(config: ProxyConfig = None) -> FastAPI:
     # Include Agent Registry routes
     app.include_router(create_agent_router(agent_registry))
     app.include_router(create_spawn_router(agent_registry))
+    
+    # -------------------------------------------------------------------------
+    # Governed Tool Calls (uses substr8 ACC/DCT schemas)
+    # -------------------------------------------------------------------------
+    
+    class GovernedToolCallRequest(BaseModel):
+        """Request for a governed tool call."""
+        agent_ref: str = Field(..., description="Agent reference (namespace/name)")
+        agent_version: str = Field(default="0.0.0")
+        agent_hash: str = Field(default="")
+        run_id: str = Field(..., description="Run identifier for DCT chain")
+        tool: str = Field(..., description="Tool name")
+        arguments: Dict[str, Any] = Field(default_factory=dict)
+    
+    @app.post("/governed/call")
+    async def governed_tool_call(request: GovernedToolCallRequest):
+        """
+        Execute a tool call with full governance:
+        1. ACC capability check
+        2. DCT audit logging
+        3. Tool execution (mocked for PoC)
+        
+        This endpoint demonstrates the full E2E governance flow.
+        """
+        if not governance:
+            raise HTTPException(
+                status_code=503,
+                detail="Governance layer not enabled"
+            )
+        
+        # Create governance context
+        ctx = GovernanceContext(
+            run_id=request.run_id,
+            agent_ref=request.agent_ref,
+            agent_version=request.agent_version,
+            agent_hash=request.agent_hash,
+        )
+        
+        # Check capability
+        check_result = governance.check_capability(ctx, request.tool)
+        decision = check_result.to_dct_decision()
+        
+        if not check_result.allowed:
+            # Log denied attempt
+            entry = governance.log_tool_call(
+                ctx=ctx,
+                tool=request.tool,
+                input_args=request.arguments,
+                output=None,
+                decision=decision,
+                error=f"ACC denied: {check_result.reason}",
+            )
+            
+            return {
+                "status": "denied",
+                "reason": check_result.reason,
+                "policy_hash": check_result.policy_hash,
+                "dct_entry_id": entry.entry_id if entry else None,
+            }
+        
+        # Execute tool (mock for PoC - in production, route to actual tool)
+        import time
+        start = time.time()
+        
+        # Mock tool execution
+        mock_result = {
+            "tool": request.tool,
+            "arguments": request.arguments,
+            "mock": True,
+            "message": f"Tool '{request.tool}' executed successfully (mock)",
+        }
+        
+        duration_ms = int((time.time() - start) * 1000) + 50  # Add mock latency
+        
+        # Log to DCT
+        entry = governance.log_tool_call(
+            ctx=ctx,
+            tool=request.tool,
+            input_args=request.arguments,
+            output=mock_result,
+            decision=decision,
+            duration_ms=duration_ms,
+        )
+        
+        return {
+            "status": "success",
+            "result": mock_result,
+            "duration_ms": duration_ms,
+            "acc_decision": {
+                "allowed": True,
+                "reason": check_result.reason,
+                "policy_hash": check_result.policy_hash,
+            },
+            "dct_entry_id": entry.entry_id if entry else None,
+        }
+    
+    @app.get("/governed/verify/{run_id}")
+    async def verify_run(run_id: str):
+        """Verify the chain integrity of a run."""
+        if not governance:
+            raise HTTPException(status_code=503, detail="Governance layer not enabled")
+        
+        return governance.verify_run(run_id)
+    
+    @app.get("/governed/export/{run_id}")
+    async def export_run(run_id: str):
+        """Export a run for audit."""
+        if not governance:
+            raise HTTPException(status_code=503, detail="Governance layer not enabled")
+        
+        return governance.export_run(run_id)
+    
+    @app.get("/governed/stats")
+    async def governance_stats():
+        """Get governance statistics."""
+        if not governance:
+            return {"enabled": False}
+        
+        return {
+            "enabled": True,
+            **governance.get_stats()
+        }
     
     # =========================================================================
     # Routes
