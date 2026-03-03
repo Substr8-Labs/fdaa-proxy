@@ -45,6 +45,9 @@ from .ledger_v2 import (
     migrate_v1_to_v2,
 )
 
+# Backward compatibility alias
+WorkLedger = WorkLedgerV2
+
 from .triggers import (
     TriggerEngine,
     TriggerEvent,
@@ -77,7 +80,8 @@ __all__ = [
     "RepairMode",
     "RepairResult",
     "ValidationResult",
-    # Ledger v2
+    # Ledger v2 (WorkLedger is backward-compat alias for WorkLedgerV2)
+    "WorkLedger",
     "WorkLedgerV2",
     "Event",
     "EventType",
