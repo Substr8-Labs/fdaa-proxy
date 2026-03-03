@@ -23,6 +23,7 @@ from .acc import ACCValidator
 from .agents import AgentRegistry, AgentStorage
 from .agents.routes import create_agent_router, create_spawn_router
 from .governance import GovernanceLayer, GovernanceContext, govern_tool_call, create_governance_layer
+from .ril import setup_ril, RILConfig, RepairMode
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -187,6 +188,21 @@ def create_app(config: ProxyConfig = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
+    # === RIL (Runtime Integrity Layer) ===
+    ril_enabled = os.environ.get("RIL_ENABLED", "true").lower() == "true"
+    if ril_enabled:
+        ril_config = RILConfig(
+            enabled=True,
+            cia_mode=RepairMode(os.environ.get("RIL_CIA_MODE", "permissive")),
+            triggers_enabled=os.environ.get("RIL_TRIGGERS", "true").lower() == "true",
+            ledger_enabled=os.environ.get("RIL_LEDGER", "true").lower() == "true",
+            ledger_path=os.environ.get("RIL_LEDGER_PATH", "./data/work_ledger.db"),
+        )
+        ril_state = setup_ril(app, ril_config)
+        logger.info(f"RIL enabled: CIA={ril_config.cia_mode.value}, Triggers={ril_config.triggers_enabled}, Ledger={ril_config.ledger_enabled}")
+    else:
+        logger.info("RIL disabled")
     
     # Include Agent Registry routes
     app.include_router(create_agent_router(agent_registry))

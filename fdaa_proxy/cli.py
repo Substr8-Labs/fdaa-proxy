@@ -787,6 +787,9 @@ def openclaw():
 @click.option("--acc-key", envvar="ACC_PUBLIC_KEY_PATH", help="Path to ACC public key for signature verification")
 @click.option("--acc-issuer", envvar="ACC_ISSUER", help="Expected ACC token issuer")
 @click.option("--audit-db", default="./openclaw-audit.db", help="Audit database path")
+@click.option("--ril/--no-ril", default=True, help="Enable Runtime Integrity Layer")
+@click.option("--ril-mode", default="permissive", type=click.Choice(["strict", "permissive", "forensic"]), help="RIL repair mode")
+@click.option("--ril-ledger", default="./data/work_ledger.db", help="RIL work ledger path")
 def openclaw_start(
     host: str, 
     port: int, 
@@ -795,7 +798,10 @@ def openclaw_start(
     require_acc: bool, 
     acc_key: str,
     acc_issuer: str,
-    audit_db: str
+    audit_db: str,
+    ril: bool,
+    ril_mode: str,
+    ril_ledger: str,
 ):
     """Start the OpenClaw Gateway proxy."""
     import asyncio
@@ -812,7 +818,8 @@ def openclaw_start(
         f"Listening: [cyan]ws://{host}:{port}[/cyan]\n"
         f"Upstream: [cyan]{upstream}[/cyan]\n"
         f"ACC Required: {'Yes' if require_acc else 'No'}\n"
-        f"ACC Mode: [{'green' if use_crypto else 'yellow'}]{acc_mode}[/{'green' if use_crypto else 'yellow'}]",
+        f"ACC Mode: [{'green' if use_crypto else 'yellow'}]{acc_mode}[/{'green' if use_crypto else 'yellow'}]\n"
+        f"RIL: [{'green' if ril else 'yellow'}]{'enabled (' + ril_mode + ')' if ril else 'disabled'}[/{'green' if ril else 'yellow'}]",
         title="🚀 Starting"
     ))
     
@@ -839,6 +846,9 @@ def openclaw_start(
         acc_validator=acc_validator,
         dct_logger=dct_logger,
         require_acc=require_acc,
+        ril_enabled=ril,
+        ril_mode=ril_mode,
+        ril_ledger_path=ril_ledger,
     ))
 
 

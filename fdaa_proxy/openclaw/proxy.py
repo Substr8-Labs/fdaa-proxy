@@ -35,6 +35,7 @@ from .protocol import (
 from ..acc import ACCValidator, ACCToken
 from ..dct import DCTLogger
 from ..telemetry import init_telemetry, ProxySpan, get_trace_context
+from ..ril import ContextIntegrityAdapter, RepairMode, TriggerEngine, WorkLedger, TriggerEvent
 
 logger = logging.getLogger("fdaa-proxy.openclaw")
 
@@ -97,6 +98,9 @@ class OpenClawProxy:
         acc_validator: Optional[ACCValidator] = None,
         dct_logger: Optional[DCTLogger] = None,
         require_acc: bool = False,
+        ril_enabled: bool = True,
+        ril_mode: str = "permissive",
+        ril_ledger_path: str = "./data/work_ledger.db",
     ):
         self.upstream_url = upstream_url
         self.upstream_token = upstream_token
@@ -106,6 +110,18 @@ class OpenClawProxy:
         
         self._sessions: Dict[int, ProxySession] = {}
         self._server = None
+        
+        # RIL - Runtime Integrity Layer
+        self.ril_enabled = ril_enabled
+        if ril_enabled:
+            self.cia = ContextIntegrityAdapter(mode=RepairMode(ril_mode))
+            self.triggers = TriggerEngine()
+            self.work_ledger = WorkLedger(path=ril_ledger_path)
+            logger.info(f"RIL enabled: CIA={ril_mode}, Triggers=on, Ledger=on")
+        else:
+            self.cia = None
+            self.triggers = None
+            self.work_ledger = None
     
     async def start(self, host: str = "0.0.0.0", port: int = 8800):
         """Start the proxy server."""
@@ -119,6 +135,37 @@ class OpenClawProxy:
         )
         
         await self._server.wait_closed()
+    
+    def get_ril_stats(self) -> Dict[str, Any]:
+        """Get RIL statistics."""
+        if not self.ril_enabled:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "cia": self.cia.get_stats() if self.cia else None,
+            "triggers": self.triggers.get_stats() if self.triggers else None,
+            "ledger": self.work_ledger.get_stats() if self.work_ledger else None,
+        }
+    
+    def validate_messages(self, messages: list) -> tuple[list, Optional[Dict]]:
+        """Validate and repair messages using CIA."""
+        if not self.ril_enabled or not self.cia:
+            return messages, None
+        
+        repaired, result = self.cia.process(messages)
+        
+        if result.repairs_applied:
+            logger.info(f"CIA repaired {len(result.repairs_applied)} issues")
+            # Fire trigger
+            if self.triggers:
+                self.triggers.fire(
+                    event=TriggerEvent.CONTEXT_REPAIRED,
+                    run_id="proxy",
+                    agent_ref="openclaw-proxy",
+                    data=result.to_dict(),
+                )
+        
+        return repaired, result.to_dict() if result.repairs_applied else None
     
     async def stop(self):
         """Stop the proxy server."""
@@ -450,6 +497,9 @@ async def run_proxy(
     dct_logger: Optional[DCTLogger] = None,
     require_acc: bool = False,
     enable_telemetry: bool = True,
+    ril_enabled: bool = True,
+    ril_mode: str = "permissive",
+    ril_ledger_path: str = "./data/work_ledger.db",
 ):
     """Run the OpenClaw proxy server."""
     
@@ -467,6 +517,11 @@ async def run_proxy(
         acc_validator=acc_validator,
         dct_logger=dct_logger,
         require_acc=require_acc,
+        ril_enabled=ril_enabled,
+        ril_mode=ril_mode,
+        ril_ledger_path=ril_ledger_path,
     )
+    
+    logger.info(f"RIL: {'enabled' if ril_enabled else 'disabled'}")
     
     await proxy.start(host=host, port=port)
