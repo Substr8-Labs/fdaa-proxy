@@ -1,4 +1,4 @@
-# TowerHQ FDAA Proxy Stack
+# TowerHQ FDAA Proxy Stack v2
 # 
 # Full FDAA infrastructure with:
 # - ACC cryptographic auth
@@ -8,7 +8,7 @@
 # Architecture:
 #   Bridge → FDAA Proxy → Shared Gateway → Anthropic Proxy (CIA) → Anthropic API
 #
-# Deploy: docker stack deploy -c towerhq-stack.yml towerhq
+# Deploy: docker stack deploy -c towerhq-stack-v2.yml towerhq
 
 version: "3.8"
 
@@ -216,3 +216,27 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # ==========================================================================
+  # RIL Status Sidecar (for monitoring)
+  # ==========================================================================
+  
+  ril-status:
+    image: fdaa-proxy:latest
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          fdaa-proxy ril status --port 18800 --json > /data/ril-status.json 2>/dev/null || echo '{"summary":"error"}' > /data/ril-status.json
+          sleep 60
+        done
+    volumes:
+      - anthropic-audit:/data
+    networks:
+      - towerhq-gateways
+    depends_on:
+      - anthropic-proxy
+    deploy:
+      mode: replicated
+      replicas: 1

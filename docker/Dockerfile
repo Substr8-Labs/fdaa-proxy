@@ -1,24 +1,29 @@
-# FDAA Proxy - Governed Gateway
+# FDAA Proxy - Governed Gateway with Runtime Integrity Layer
 FROM python:3.11-slim
 
 WORKDIR /app
+
+# Install curl for healthchecks
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Copy everything needed for install
 COPY pyproject.toml README.md ./
 COPY fdaa_proxy/ fdaa_proxy/
 
-# Install with OTEL support
-RUN pip install --no-cache-dir ".[otel]"
+# Install the package
+RUN pip install --no-cache-dir -e .
 
 # Create data directory for audit logs
 RUN mkdir -p /data
 
 # Expose ports
-EXPOSE 8766 8800
+# 8766 - MCP Proxy
+# 8800 - OpenClaw Proxy  
+# 18800 - Anthropic Proxy (CIA)
+EXPOSE 8766 8800 18800
 
-# Health check for OpenClaw proxy mode
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import socket; s=socket.socket(); s.connect(('localhost',8800)); s.close()" || exit 1
+# No default healthcheck - set per-service based on mode
 
-# Default: OpenClaw proxy mode
-CMD ["fdaa-proxy", "openclaw", "start", "--host", "0.0.0.0", "--port", "8800"]
+# Default: help (require explicit mode selection)
+ENTRYPOINT ["fdaa-proxy"]
+CMD ["--help"]
