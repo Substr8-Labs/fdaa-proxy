@@ -138,6 +138,31 @@ class OpenClawProvisioner:
         agents_config = config.get("agents", {})
         return agents_config.get("list", [])
     
+    def get_agent_base_path(self) -> str:
+        """
+        Get the base path for provisioned agent workspaces.
+        
+        Priority:
+        1. FDAA_AGENTS_PATH env var
+        2. /data/fdaa-agents (Docker volume)
+        3. ~/.openclaw/agents/fdaa (host fallback)
+        
+        Returns persistent, isolated path - NEVER /tmp.
+        """
+        # Check env var first
+        env_path = os.environ.get("FDAA_AGENTS_PATH")
+        if env_path:
+            return env_path
+        
+        # Docker volume path (preferred for containers)
+        docker_path = "/data/fdaa-agents"
+        if os.path.exists("/data") and os.access("/data", os.W_OK):
+            return docker_path
+        
+        # Host fallback
+        home = os.path.expanduser("~")
+        return os.path.join(home, ".openclaw", "agents", "fdaa")
+    
     def generate_openclaw_agent_config(
         self,
         agent_id: str,
@@ -160,13 +185,22 @@ class OpenClawProvisioner:
         
         For system prompts, OpenClaw reads from agentDir/*.md files.
         We write the compiled prompt to an agent directory and point to it.
+        
+        SECURITY: Agent workspace is isolated - no access to main or other agents.
         """
+        # Validate agent_id (prevent path traversal)
+        if not agent_id or ".." in agent_id or "/" in agent_id or "\\" in agent_id:
+            raise ValueError(f"Invalid agent_id: {agent_id}")
+        
         # Generate unique OpenClaw ID
         openclaw_id = f"fdaa:{agent_id}"
         
-        # Create agent directory with persona files
-        agent_dir = workspace or f"/tmp/fdaa-agents/{agent_id}"
-        os.makedirs(agent_dir, exist_ok=True)
+        # Create agent directory in persistent, isolated location
+        base_path = self.get_agent_base_path()
+        agent_dir = workspace or os.path.join(base_path, agent_id)
+        
+        # Create with restricted permissions (owner only)
+        os.makedirs(agent_dir, mode=0o700, exist_ok=True)
         
         # Write system prompt as AGENTS.md (OpenClaw reads this)
         agents_md_path = os.path.join(agent_dir, "AGENTS.md")
@@ -440,9 +474,21 @@ class OpenClawProvisioner:
                     result.error = f"Deprovision failed: {response.status_code}"
                     return result
             
+            # Clean up agent workspace files
+            try:
+                base_path = self.get_agent_base_path()
+                agent_dir = os.path.join(base_path, agent_id)
+                if os.path.exists(agent_dir) and os.path.isdir(agent_dir):
+                    import shutil
+                    shutil.rmtree(agent_dir)
+                    logger.info(f"Cleaned up agent workspace: {agent_dir}")
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup workspace for {agent_id}: {cleanup_error}")
+                # Don't fail deprovision if cleanup fails
+            
             result.success = True
             result.status = ProvisionStatus.VERIFIED
-            result.message = f"Agent {agent_id} deprovisioned"
+            result.message = f"Agent {agent_id} deprovisioned and workspace cleaned"
             result.completed_at = datetime.now(timezone.utc)
             self._log_to_dct(result, "deprovision_success")
             return result
