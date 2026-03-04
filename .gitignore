@@ -56,3 +56,4 @@ audit/
 .env
 *.pem
 *.key
+anthropic.env

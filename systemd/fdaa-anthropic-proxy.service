@@ -1,0 +1,50 @@
+[Unit]
+Description=FDAA Anthropic Proxy (Topology A - LLM Egress Protection)
+Documentation=https://github.com/Substr8-Labs/fdaa-proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claw
+Group=claw
+
+# Working directory for data files
+WorkingDirectory=/home/claw/.openclaw/fdaa-proxy
+
+# Environment
+Environment="PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Load API key from file
+EnvironmentFile=/home/claw/.openclaw/fdaa-proxy/anthropic.env
+
+# Start the proxy
+ExecStart=/home/linuxbrew/.linuxbrew/bin/python3 -m fdaa_proxy.cli anthropic start \
+    --host 0.0.0.0 \
+    --port 18800 \
+    --cia-mode permissive \
+    --audit-db /home/claw/.openclaw/fdaa-proxy/data/anthropic-audit.db
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/claw/.openclaw/fdaa-proxy/data
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fdaa-anthropic-proxy
+
+[Install]
+WantedBy=multi-user.target

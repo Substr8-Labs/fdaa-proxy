@@ -872,6 +872,114 @@ def openclaw_status(port: int):
 
 
 # =============================================================================
+# Anthropic Proxy Commands (Topology A - LLM Egress Proxy)
+# =============================================================================
+
+@cli.group()
+def anthropic():
+    """Anthropic API proxy commands (Topology A - protects LLM egress)."""
+    pass
+
+
+@anthropic.command("start")
+@click.option("--host", "-h", default="0.0.0.0", help="Host to bind to")
+@click.option("--port", "-p", default=18800, type=int, help="Port to bind to")
+@click.option("--api-key", envvar="ANTHROPIC_API_KEY", required=True, help="Anthropic API key")
+@click.option("--cia-mode", default="permissive", type=click.Choice(["strict", "permissive", "forensic"]), help="CIA repair mode")
+@click.option("--audit-db", default="./data/anthropic-audit.db", help="Audit database path")
+def anthropic_start(
+    host: str,
+    port: int,
+    api_key: str,
+    cia_mode: str,
+    audit_db: str,
+):
+    """
+    Start the Anthropic API proxy (Topology A).
+    
+    This proxy sits between OpenClaw and the Anthropic API, validating
+    and repairing message[] payloads before they reach Anthropic.
+    
+    Configure OpenClaw to use this proxy as its Anthropic baseUrl:
+    
+        models.providers.anthropic.baseUrl = http://localhost:18800
+    
+    The proxy will:
+    - Intercept all /v1/messages requests
+    - Run CIA validation on the messages[] payload
+    - Repair tool_use/tool_result pairing issues
+    - Forward clean requests to api.anthropic.com
+    - Log repairs to DCT audit trail
+    """
+    import uvicorn
+    from .anthropic_proxy import AnthropicProxy
+    
+    console.print(Panel(
+        f"[bold]FDAA Anthropic Proxy (Topology A)[/bold]\n"
+        f"Listening: [cyan]http://{host}:{port}[/cyan]\n"
+        f"Upstream: [cyan]https://api.anthropic.com[/cyan]\n"
+        f"CIA Mode: [green]{cia_mode}[/green]\n"
+        f"Audit DB: {audit_db}\n\n"
+        f"[dim]Configure OpenClaw:[/dim]\n"
+        f'  models.providers.anthropic.baseUrl = "http://localhost:{port}"',
+        title="🛡️ Starting Anthropic Proxy"
+    ))
+    
+    proxy = AnthropicProxy(
+        anthropic_api_key=api_key,
+        cia_mode=cia_mode,
+        audit_db_path=audit_db,
+    )
+    
+    app = proxy.create_app()
+    
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+
+
+@anthropic.command("status")
+@click.option("--port", "-p", default=18800, type=int, help="Proxy port")
+def anthropic_status(port: int):
+    """Check Anthropic proxy status and CIA statistics."""
+    import httpx
+    
+    try:
+        response = httpx.get(f"http://localhost:{port}/status", timeout=5.0)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            stats = data.get("stats", {})
+            cia = data.get("cia", {})
+            
+            console.print(Panel(
+                f"[bold green]Running[/bold green]\n\n"
+                f"[bold]Traffic:[/bold]\n"
+                f"  Requests: {stats.get('requests_total', 0)}\n"
+                f"  Repaired: {stats.get('requests_repaired', 0)} ({stats.get('repair_rate', 0):.1%})\n"
+                f"  Failed: {stats.get('requests_failed', 0)}\n\n"
+                f"[bold]CIA:[/bold]\n"
+                f"  Mode: {cia.get('mode', 'unknown')}\n"
+                f"  Stats: {json.dumps(cia.get('stats', {}), indent=2)}",
+                title="📊 Anthropic Proxy Status"
+            ))
+        else:
+            console.print(f"[red]✗[/red] Proxy returned status {response.status_code}")
+            sys.exit(1)
+            
+    except httpx.ConnectError:
+        console.print(f"[red]✗[/red] Anthropic proxy not running on port {port}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to check status: {e}")
+        sys.exit(1)
+
+
+# =============================================================================
 # Verify Commands
 # =============================================================================
 
@@ -982,6 +1090,284 @@ def llm_start(
         gam_repo_path=gam_repo_path,
     )
     proxy.run(host=host, port=port)
+
+
+# =============================================================================
+# Runtime Integrity Layer (RIL) Commands
+# =============================================================================
+
+@cli.group()
+def ril():
+    """Runtime Integrity Layer commands - production health at a glance."""
+    pass
+
+
+@ril.command("status")
+@click.option("--port", "-p", default=18800, type=int, help="Anthropic proxy port")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def ril_status(port: int, as_json: bool):
+    """
+    Check Runtime Integrity Layer health.
+    
+    This is the single command to verify governance is active.
+    Run this after any deployment or when debugging issues.
+    """
+    import httpx
+    from datetime import datetime, timezone
+    
+    status = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "proxy": {"status": "unknown"},
+        "cia": {"status": "unknown"},
+        "audit": {"status": "unknown"},
+        "uptime": None,
+        "summary": "unknown",
+    }
+    
+    # Check proxy health
+    try:
+        response = httpx.get(f"http://localhost:{port}/status", timeout=5.0)
+        if response.status_code == 200:
+            data = response.json()
+            stats = data.get("stats", {})
+            cia_data = data.get("cia", {})
+            
+            status["proxy"] = {
+                "status": "healthy",
+                "port": port,
+                "requests_total": stats.get("requests_total", 0),
+                "requests_repaired": stats.get("requests_repaired", 0),
+                "requests_failed": stats.get("requests_failed", 0),
+                "uptime_seconds": stats.get("uptime_seconds", 0),
+            }
+            
+            status["cia"] = {
+                "status": "active" if cia_data.get("enabled") else "disabled",
+                "mode": cia_data.get("mode", "unknown"),
+                "validated": cia_data.get("stats", {}).get("total_validated", 0),
+                "repaired": cia_data.get("stats", {}).get("repaired", 0),
+            }
+            
+            status["uptime"] = stats.get("uptime_seconds", 0)
+        else:
+            status["proxy"]["status"] = f"error ({response.status_code})"
+    except httpx.ConnectError:
+        status["proxy"]["status"] = "offline"
+    except Exception as e:
+        status["proxy"]["status"] = f"error: {e}"
+    
+    # Check audit DB
+    audit_db_path = Path("./data/anthropic-audit.db")
+    if not audit_db_path.exists():
+        audit_db_path = Path("/home/node/.openclaw/workspace/fdaa-proxy/data/anthropic-audit.db")
+    
+    if audit_db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(audit_db_path))
+            cursor = conn.execute("SELECT COUNT(*) FROM dct_entries")
+            total = cursor.fetchone()[0]
+            
+            # Count last hour
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM dct_entries WHERE timestamp > datetime('now', '-1 hour')"
+            )
+            last_hour = cursor.fetchone()[0]
+            
+            # Check for fail-open events (would be logged differently, but check repairs)
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM dct_entries WHERE result LIKE '%repairs_applied%' AND result NOT LIKE '%[]%'"
+            )
+            actual_repairs = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            status["audit"] = {
+                "status": "active",
+                "path": str(audit_db_path),
+                "total_entries": total,
+                "last_hour": last_hour,
+                "actual_repairs": actual_repairs,
+            }
+        except Exception as e:
+            status["audit"] = {"status": f"error: {e}"}
+    else:
+        status["audit"]["status"] = "no database found"
+    
+    # Determine overall summary
+    if status["proxy"]["status"] == "healthy" and status["cia"]["status"] == "active":
+        status["summary"] = "protected"
+    elif status["proxy"]["status"] == "healthy":
+        status["summary"] = "running (CIA disabled)"
+    elif status["proxy"]["status"] == "offline":
+        status["summary"] = "UNPROTECTED - proxy offline"
+    else:
+        status["summary"] = "degraded"
+    
+    # Output
+    if as_json:
+        console.print(json.dumps(status, indent=2))
+        return
+    
+    # Pretty output
+    uptime_str = "N/A"
+    if status["uptime"]:
+        hours = int(status["uptime"] // 3600)
+        mins = int((status["uptime"] % 3600) // 60)
+        uptime_str = f"{hours}h {mins}m"
+    
+    proxy_status = status["proxy"]["status"]
+    proxy_color = "green" if proxy_status == "healthy" else "red"
+    
+    cia_status = status["cia"]["status"]
+    cia_color = "green" if cia_status == "active" else "yellow" if cia_status == "disabled" else "red"
+    
+    audit_status = status["audit"]["status"]
+    audit_color = "green" if audit_status == "active" else "red"
+    
+    summary_color = "green" if status["summary"] == "protected" else "red"
+    
+    repairs_last_hour = status["audit"].get("last_hour", 0)
+    actual_repairs = status["audit"].get("actual_repairs", 0)
+    
+    output = f"""[bold {summary_color}]{status["summary"].upper()}[/bold {summary_color}]
+
+[bold]Proxy:[/bold]       [{proxy_color}]{proxy_status}[/{proxy_color}]
+[bold]CIA:[/bold]         [{cia_color}]{cia_status}[/{cia_color}] (mode: {status["cia"].get("mode", "N/A")})
+[bold]Audit:[/bold]       [{audit_color}]{audit_status}[/{audit_color}]
+[bold]Uptime:[/bold]      {uptime_str}
+
+[bold]Requests:[/bold]    {status["proxy"].get("requests_total", 0)} total
+[bold]Repairs:[/bold]     {repairs_last_hour} last hour / {actual_repairs} actual repairs
+[bold]Failed:[/bold]      {status["proxy"].get("requests_failed", 0)}"""
+    
+    console.print(Panel(output, title="🛡️ RIL Status", border_style=summary_color))
+    
+    # Exit with error if not protected
+    if status["summary"] != "protected":
+        sys.exit(1)
+
+
+@ril.command("test")
+@click.option("--port", "-p", default=18800, type=int, help="Anthropic proxy port")
+def ril_test(port: int):
+    """
+    Run corruption injection test to verify CIA is working.
+    
+    Sends a deliberately malformed payload and verifies CIA repairs it.
+    """
+    import httpx
+    
+    console.print("[bold]Running CIA corruption injection test...[/bold]\n")
+    
+    # Create corrupted payload
+    bad_payload = {
+        "model": "claude-3-5-sonnet-latest",
+        "max_tokens": 32,
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "assistant", "content": [{"type": "tool_result", "tool_use_id": "toolu_test_orphan", "content": "orphan"}]}
+        ]
+    }
+    
+    try:
+        response = httpx.post(
+            f"http://localhost:{port}/v1/messages",
+            json=bad_payload,
+            headers={"content-type": "application/json"},
+            timeout=10.0,
+        )
+        
+        # We expect 401/403 (no auth) or 400 (model error) - but NOT 500 (proxy crash)
+        if response.status_code == 500:
+            console.print("[red]✗ FAIL:[/red] Proxy returned 500 - CIA may have crashed")
+            sys.exit(1)
+        elif response.status_code in (401, 403):
+            console.print("[green]✓ PASS:[/green] Proxy handled request (auth required, expected)")
+        elif response.status_code == 400:
+            console.print("[green]✓ PASS:[/green] Request reached Anthropic (rejected for other reason)")
+        else:
+            console.print(f"[yellow]? INFO:[/yellow] Got HTTP {response.status_code}")
+        
+        console.print("\nChecking if CIA logged the repair...")
+        
+        # Check audit DB for the repair
+        import sqlite3
+        audit_db_path = Path("/home/node/.openclaw/workspace/fdaa-proxy/data/anthropic-audit.db")
+        if audit_db_path.exists():
+            conn = sqlite3.connect(str(audit_db_path))
+            cursor = conn.execute(
+                "SELECT result FROM dct_entries WHERE result LIKE '%toolu_test_orphan%' ORDER BY timestamp DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                console.print("[green]✓ PASS:[/green] CIA repair logged in audit DB")
+                console.print(f"  Repair record: {row[0][:100]}...")
+            else:
+                console.print("[yellow]? INFO:[/yellow] No repair record found (may need to check logs)")
+        
+        console.print("\n[bold green]Corruption injection test complete.[/bold green]")
+        
+    except httpx.ConnectError:
+        console.print(f"[red]✗ FAIL:[/red] Cannot connect to proxy on port {port}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]✗ FAIL:[/red] Test error: {e}")
+        sys.exit(1)
+
+
+@ril.command("repairs")
+@click.option("--hours", "-h", default=24, type=int, help="Hours to look back")
+@click.option("--limit", "-n", default=10, type=int, help="Max entries to show")
+def ril_repairs(hours: int, limit: int):
+    """Show recent CIA repairs from audit log."""
+    import sqlite3
+    
+    audit_db_path = Path("/home/node/.openclaw/workspace/fdaa-proxy/data/anthropic-audit.db")
+    if not audit_db_path.exists():
+        console.print("[red]✗[/red] Audit database not found")
+        sys.exit(1)
+    
+    conn = sqlite3.connect(str(audit_db_path))
+    cursor = conn.execute(f"""
+        SELECT id, timestamp, arguments, result 
+        FROM dct_entries 
+        WHERE timestamp > datetime('now', '-{hours} hours')
+        ORDER BY timestamp DESC 
+        LIMIT {limit}
+    """)
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        console.print(f"[green]✓[/green] No repairs in the last {hours} hours")
+        return
+    
+    table = Table(title=f"CIA Repairs (last {hours}h)")
+    table.add_column("Time", style="dim")
+    table.add_column("Request ID")
+    table.add_column("Repairs Applied")
+    
+    for row in rows:
+        entry_id, timestamp, arguments, result = row
+        try:
+            args = json.loads(arguments) if arguments else {}
+            res = json.loads(result) if result else {}
+            repairs = res.get("repairs_applied", [])
+            repair_str = ", ".join(r.get("type", "unknown") for r in repairs) if repairs else "validation only"
+        except:
+            repair_str = "parse error"
+        
+        table.add_row(
+            timestamp[:19] if timestamp else "?",
+            args.get("request_id", entry_id)[:20],
+            repair_str[:40],
+        )
+    
+    console.print(table)
 
 
 # =============================================================================

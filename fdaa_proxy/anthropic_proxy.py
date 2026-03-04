@@ -321,6 +321,7 @@ class AnthropicProxy:
                     self.stats.requests_repaired / self.stats.requests_total 
                     if self.stats.requests_total > 0 else 0
                 ),
+                "uptime_seconds": (datetime.now(timezone.utc) - self.stats.started_at).total_seconds(),
             },
         })
     
