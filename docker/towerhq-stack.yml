@@ -6,7 +6,7 @@
 # - DCT audit logging
 #
 # Architecture:
-#   Bridge → FDAA Proxy → Shared Gateway → Anthropic Proxy (CIA) → Anthropic API
+#   Bridge → FDAA Proxy → Shared Gateway → RIL Proxy (CIA) → Anthropic API
 #
 # Deploy: docker stack deploy -c towerhq-stack.yml towerhq
 
@@ -18,7 +18,7 @@ networks:
 
 volumes:
   fdaa-data:
-  anthropic-audit:
+  ril-audit:
   acc-keys:
 
 configs:
@@ -36,12 +36,12 @@ secrets:
 
 services:
   # ==========================================================================
-  # Anthropic Proxy - CIA Runtime Integrity Layer
+  # RIL Proxy - CIA Runtime Integrity Layer
   # ==========================================================================
   # This MUST be the egress point for all LLM traffic.
   # Validates/repairs tool_use/tool_result pairing before requests hit Anthropic.
   
-  anthropic-proxy:
+  ril-proxy:
     image: fdaa-proxy:latest
     entrypoint:
       - sh
@@ -52,11 +52,11 @@ services:
           --host=0.0.0.0 \
           --port=18800 \
           --cia-mode=permissive \
-          --audit-db=/data/anthropic-audit.db
+          --audit-db=/data/ril-audit.db
     secrets:
       - anthropic-api-key
     volumes:
-      - anthropic-audit:/data
+      - ril-audit:/data
     networks:
       - towerhq-gateways
     deploy:
@@ -76,7 +76,7 @@ services:
   # ==========================================================================
   # Shared OpenClaw Gateway
   # ==========================================================================
-  # Routes through Anthropic Proxy for CIA protection
+  # Routes through RIL Proxy for CIA protection
   
   shared-gateway:
     image: towerhq/gateway-shared:v9
@@ -84,15 +84,14 @@ services:
       - "19000:18789"
     environment:
       # TODO: Update gateway image to support ANTHROPIC_BASE_URL env var
-      # Then change to: ANTHROPIC_BASE_URL=http://anthropic-proxy:18800
+      # Then change to: ANTHROPIC_BASE_URL=http://ril-proxy:18800
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     configs:
       - source: shared-gateway-auth
         target: /runtime-state/agents/main/agent/auth-profiles.json
     networks:
       - towerhq-gateways
-    depends_on:
-      - anthropic-proxy
+    # Note: depends_on doesn't work in Swarm mode, rely on healthchecks + restart
     deploy:
       mode: replicated
       replicas: 1
@@ -132,8 +131,6 @@ services:
       - fdaa-data:/data
     networks:
       - towerhq-gateways
-    depends_on:
-      - shared-gateway
     deploy:
       mode: replicated
       replicas: 1
@@ -158,8 +155,6 @@ services:
       - GATEWAY_TOKEN=towerhq-internal-token-2026
     networks:
       - towerhq-gateways
-    depends_on:
-      - fdaa-proxy
     deploy:
       mode: replicated
       replicas: 1
@@ -205,7 +200,7 @@ services:
       - "8080:8080"
     volumes:
       - fdaa-data:/data:ro
-      - anthropic-audit:/data/anthropic:ro
+      - ril-audit:/data/anthropic:ro
     networks:
       - towerhq-gateways
     deploy:

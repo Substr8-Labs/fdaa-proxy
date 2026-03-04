@@ -18,7 +18,7 @@ networks:
 
 volumes:
   fdaa-data:
-  anthropic-audit:
+  ril-audit:
   acc-keys:
 
 configs:
@@ -52,11 +52,11 @@ services:
           --host=0.0.0.0 \
           --port=18800 \
           --cia-mode=permissive \
-          --audit-db=/data/anthropic-audit.db
+          --audit-db=/data/ril-audit.db
     secrets:
       - anthropic-api-key
     volumes:
-      - anthropic-audit:/data
+      - ril-audit:/data
     networks:
       - towerhq-gateways
     deploy:
@@ -205,7 +205,7 @@ services:
       - "8080:8080"
     volumes:
       - fdaa-data:/data:ro
-      - anthropic-audit:/data/anthropic:ro
+      - ril-audit:/data/anthropic:ro
     networks:
       - towerhq-gateways
     deploy:
@@ -232,7 +232,7 @@ services:
           sleep 60
         done
     volumes:
-      - anthropic-audit:/data
+      - ril-audit:/data
     networks:
       - towerhq-gateways
     depends_on:
