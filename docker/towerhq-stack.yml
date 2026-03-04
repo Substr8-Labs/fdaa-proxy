@@ -83,9 +83,9 @@ services:
     ports:
       - "19000:18789"
     environment:
-      # Point to Anthropic Proxy instead of direct Anthropic API
-      - ANTHROPIC_BASE_URL=http://anthropic-proxy:18800
-      - ANTHROPIC_API_KEY=proxy-managed
+      # TODO: Update gateway image to support ANTHROPIC_BASE_URL env var
+      # Then change to: ANTHROPIC_BASE_URL=http://anthropic-proxy:18800
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     configs:
       - source: shared-gateway-auth
         target: /runtime-state/agents/main/agent/auth-profiles.json
