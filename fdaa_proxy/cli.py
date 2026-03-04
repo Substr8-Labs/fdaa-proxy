@@ -62,6 +62,11 @@ def start(ctx, host: str, port: int, reload: bool):
         title="🚀 Starting"
     ))
     
+    # Pass port/host via env vars since server_main uses config
+    import os
+    os.environ["FDAA_HOST"] = host
+    os.environ["FDAA_PORT"] = str(port)
+    
     from .server import main as server_main
     server_main(config_path)
 
@@ -911,8 +916,11 @@ def anthropic_start(
     - Forward clean requests to api.anthropic.com
     - Log repairs to DCT audit trail
     """
+    import logging as _logging
     import uvicorn
     from .anthropic_proxy import AnthropicProxy
+
+    _logging.basicConfig(level=_logging.INFO)
     
     console.print(Panel(
         f"[bold]FDAA Anthropic Proxy (Topology A)[/bold]\n"
@@ -1368,6 +1376,175 @@ def ril_repairs(hours: int, limit: int):
         )
     
     console.print(table)
+
+
+# =============================================================================
+# Provisioning Commands
+# =============================================================================
+
+@cli.group()
+def provision():
+    """Provision agents to OpenClaw as static agents."""
+    pass
+
+
+@provision.command("agent")
+@click.argument("agent_id")
+@click.option("--version", "-v", type=int, help="Specific version (default: current)")
+@click.option("--gateway-url", default="http://localhost:18789", help="OpenClaw gateway URL")
+@click.option("--gateway-password", envvar="OPENCLAW_PASSWORD", help="Gateway password")
+@click.option("--registry-port", "-p", default=8091, type=int, help="FDAA registry port")
+def provision_agent(
+    agent_id: str,
+    version: int,
+    gateway_url: str,
+    gateway_password: str,
+    registry_port: int,
+):
+    """
+    Provision an agent from registry as a static agent in OpenClaw.
+    
+    This creates the agent in OpenClaw's agents.list[] and triggers hot reload.
+    
+    Example:
+        fdaa provision agent ada
+        fdaa provision agent val --version 2
+    """
+    import asyncio
+    import httpx
+    
+    console.print(f"[bold]Provisioning agent:[/bold] {agent_id}" + (f" v{version}" if version else " (current)"))
+    
+    async def do_provision():
+        # Call the API endpoint
+        async with httpx.AsyncClient() as client:
+            body = {
+                "gateway_url": gateway_url,
+                "gateway_password": gateway_password,
+            }
+            if version:
+                body["version"] = version
+            
+            response = await client.post(
+                f"http://localhost:{registry_port}/v1/agents/{agent_id}/provision",
+                json=body,
+                timeout=30.0,
+            )
+            return response
+    
+    try:
+        response = asyncio.run(do_provision())
+        
+        if response.status_code == 200:
+            result = response.json()
+            console.print(Panel(
+                f"[bold green]✓ Provisioned successfully[/bold green]\n\n"
+                f"Agent ID:         {result.get('agent_id')}\n"
+                f"OpenClaw ID:      {result.get('openclaw_agent_id')}\n"
+                f"Version:          {result.get('version')}\n"
+                f"Hash:             {result.get('hash', '')[:16]}...\n"
+                f"Status:           {result.get('provision_status')}",
+                title="🚀 Agent Provisioned"
+            ))
+        else:
+            error = response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text
+            console.print(f"[red]✗ Provisioning failed:[/red] {error}")
+            sys.exit(1)
+            
+    except httpx.ConnectError:
+        console.print(f"[red]✗ Cannot connect to FDAA registry on port {registry_port}[/red]")
+        console.print("Start the registry with: fdaa start")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]✗ Error:[/red] {e}")
+        sys.exit(1)
+
+
+@provision.command("list")
+@click.option("--gateway-url", default="http://localhost:18789", help="OpenClaw gateway URL")
+@click.option("--gateway-password", envvar="OPENCLAW_PASSWORD", help="Gateway password")
+def provision_list(gateway_url: str, gateway_password: str):
+    """List all FDAA-provisioned agents in OpenClaw."""
+    import asyncio
+    import httpx
+    import os
+    
+    async def do_list():
+        from .openclaw.provisioner import OpenClawProvisioner
+        
+        provisioner = OpenClawProvisioner(
+            gateway_url=gateway_url,
+            gateway_password=gateway_password or os.environ.get("OPENCLAW_PASSWORD", ""),
+        )
+        return await provisioner.list_provisioned()
+    
+    try:
+        agents = asyncio.run(do_list())
+        
+        if not agents:
+            console.print("[yellow]No FDAA agents provisioned in OpenClaw[/yellow]")
+            return
+        
+        table = Table(title="Provisioned Agents")
+        table.add_column("OpenClaw ID", style="cyan")
+        table.add_column("Agent ID")
+        table.add_column("Version")
+        table.add_column("Hash")
+        table.add_column("Provisioned")
+        
+        for agent in agents:
+            table.add_row(
+                agent.get("openclaw_id", ""),
+                agent.get("agent_id", ""),
+                str(agent.get("version", "")),
+                (agent.get("agent_hash", "") or "")[:16] + "...",
+                (agent.get("provisioned_at", "") or "")[:19],
+            )
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]✗ Error:[/red] {e}")
+        sys.exit(1)
+
+
+@provision.command("remove")
+@click.argument("agent_id")
+@click.option("--gateway-url", default="http://localhost:18789", help="OpenClaw gateway URL")
+@click.option("--gateway-password", envvar="OPENCLAW_PASSWORD", help="Gateway password")
+@click.option("--registry-port", "-p", default=8091, type=int, help="FDAA registry port")
+def provision_remove(agent_id: str, gateway_url: str, gateway_password: str, registry_port: int):
+    """Remove a provisioned agent from OpenClaw."""
+    import asyncio
+    import httpx
+    
+    console.print(f"[bold]Deprovisioning agent:[/bold] {agent_id}")
+    
+    async def do_deprovision():
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"http://localhost:{registry_port}/v1/agents/{agent_id}/provision",
+                timeout=30.0,
+            )
+            return response
+    
+    try:
+        response = asyncio.run(do_deprovision())
+        
+        if response.status_code == 200:
+            result = response.json()
+            console.print(f"[green]✓[/green] Agent {agent_id} deprovisioned: {result.get('message')}")
+        else:
+            error = response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text
+            console.print(f"[red]✗ Deprovision failed:[/red] {error}")
+            sys.exit(1)
+            
+    except httpx.ConnectError:
+        console.print(f"[red]✗ Cannot connect to FDAA registry on port {registry_port}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]✗ Error:[/red] {e}")
+        sys.exit(1)
 
 
 # =============================================================================

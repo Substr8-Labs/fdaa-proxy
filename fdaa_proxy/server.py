@@ -21,7 +21,7 @@ from .mcp import MCPPolicy
 from .dct import DCTLogger
 from .acc import ACCValidator
 from .agents import AgentRegistry, AgentStorage
-from .agents.routes import create_agent_router, create_spawn_router
+from .agents.routes import create_agent_router, create_spawn_router, create_provision_router
 from .governance import GovernanceLayer, GovernanceContext, govern_tool_call, create_governance_layer
 from .ril import setup_ril, RILConfig, RepairMode
 
@@ -195,18 +195,18 @@ def create_app(config: ProxyConfig = None) -> FastAPI:
         ril_config = RILConfig(
             enabled=True,
             cia_mode=RepairMode(os.environ.get("RIL_CIA_MODE", "permissive")),
-            triggers_enabled=os.environ.get("RIL_TRIGGERS", "true").lower() == "true",
             ledger_enabled=os.environ.get("RIL_LEDGER", "true").lower() == "true",
             ledger_path=os.environ.get("RIL_LEDGER_PATH", "./data/work_ledger.db"),
         )
         ril_state = setup_ril(app, ril_config)
-        logger.info(f"RIL enabled: CIA={ril_config.cia_mode.value}, Triggers={ril_config.triggers_enabled}, Ledger={ril_config.ledger_enabled}")
+        logger.info(f"RIL enabled: CIA={ril_config.cia_mode.value}, Ledger={ril_config.ledger_enabled}")
     else:
         logger.info("RIL disabled")
     
     # Include Agent Registry routes
     app.include_router(create_agent_router(agent_registry))
     app.include_router(create_spawn_router(agent_registry))
+    app.include_router(create_provision_router())
     
     # -------------------------------------------------------------------------
     # Governed Tool Calls (uses substr8 ACC/DCT schemas)
@@ -603,8 +603,8 @@ def main(config_path: str = None):
     
     app = create_app(config)
     
-    host = config.server.host if config else "0.0.0.0"
-    port = config.server.port if config else 8766
+    host = os.environ.get("FDAA_HOST") or (config.server.host if config else "0.0.0.0")
+    port = int(os.environ.get("FDAA_PORT") or (config.server.port if config else 8766))
     workers = config.server.workers if config else 1
     reload = config.server.reload if config else False
     

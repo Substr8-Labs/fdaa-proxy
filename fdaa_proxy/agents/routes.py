@@ -15,6 +15,12 @@ from .models import (
     SpawnRequest, SpawnResult
 )
 from .registry import AgentRegistry
+from ..openclaw.provisioner import (
+    OpenClawProvisioner,
+    ProvisionResult,
+    ProvisionStatus,
+    provision_from_registry,
+)
 
 logger = logging.getLogger("fdaa.agents.routes")
 
@@ -316,6 +322,127 @@ def create_agent_router(registry: AgentRegistry) -> APIRouter:
             "agent_id": agent_id,
             "spawns": history,
             "count": len(history),
+        }
+    
+    # =========================================================================
+    # Provisioning (Static Agent in OpenClaw)
+    # =========================================================================
+    
+    class ProvisionBody(BaseModel):
+        """Request body for agent provisioning."""
+        version: Optional[int] = None
+        gateway_url: Optional[str] = None
+        gateway_password: Optional[str] = None
+        verify_hash: bool = True
+        expected_hash: Optional[str] = None
+    
+    @router.post("/{agent_id}/provision")
+    async def provision_agent(agent_id: str, body: ProvisionBody = None):
+        """
+        Provision an agent as a static agent in OpenClaw.
+        
+        This:
+        1. Fetches agent from registry
+        2. Verifies hash (if expected_hash provided)
+        3. Compiles system prompt
+        4. Patches OpenClaw config (agents.list)
+        5. Triggers hot reload
+        6. Verifies agent is active
+        
+        Requires OpenClaw gateway.reload.mode: "hybrid" for hot reload.
+        """
+        import os
+        
+        # Get gateway config from body or env
+        gateway_url = (body.gateway_url if body else None) or os.environ.get(
+            "OPENCLAW_URL", "http://localhost:18789"
+        )
+        gateway_password = (body.gateway_password if body else None) or os.environ.get(
+            "OPENCLAW_PASSWORD", ""
+        )
+        
+        # Provision via helper
+        result = await provision_from_registry(
+            registry=registry,
+            agent_id=agent_id,
+            version=body.version if body else None,
+            gateway_url=gateway_url,
+            gateway_password=gateway_password,
+        )
+        
+        if not result.success:
+            raise HTTPException(
+                status_code=500 if result.status != ProvisionStatus.FAILED else 400,
+                detail={
+                    "error": result.error,
+                    "status": result.status.value,
+                    "agent_id": result.agent_id,
+                    "agent_hash": result.agent_hash,
+                }
+            )
+        
+        return {
+            "status": "provisioned",
+            "agent_id": result.agent_id,
+            "openclaw_agent_id": result.openclaw_agent_id,
+            "version": result.version,
+            "hash": result.agent_hash,
+            "message": result.message,
+            "provision_status": result.status.value,
+        }
+    
+    @router.delete("/{agent_id}/provision")
+    async def deprovision_agent(agent_id: str):
+        """
+        Remove a provisioned agent from OpenClaw.
+        
+        Removes the agent from agents.list and triggers reload.
+        """
+        import os
+        
+        gateway_url = os.environ.get("OPENCLAW_URL", "http://localhost:18789")
+        gateway_password = os.environ.get("OPENCLAW_PASSWORD", "")
+        
+        provisioner = OpenClawProvisioner(
+            gateway_url=gateway_url,
+            gateway_password=gateway_password,
+        )
+        
+        result = await provisioner.deprovision(agent_id)
+        
+        if not result.success:
+            raise HTTPException(status_code=404, detail=result.error)
+        
+        return {
+            "status": "deprovisioned",
+            "agent_id": agent_id,
+            "message": result.message,
+        }
+    
+    return router
+
+
+def create_provision_router() -> APIRouter:
+    """Create router for provisioning operations (not tied to registry)."""
+    import os
+    
+    router = APIRouter(prefix="/v1/provision", tags=["provision"])
+    
+    @router.get("")
+    async def list_provisioned():
+        """List all FDAA-provisioned agents in OpenClaw."""
+        gateway_url = os.environ.get("OPENCLAW_URL", "http://localhost:18789")
+        gateway_password = os.environ.get("OPENCLAW_PASSWORD", "")
+        
+        provisioner = OpenClawProvisioner(
+            gateway_url=gateway_url,
+            gateway_password=gateway_password,
+        )
+        
+        agents = await provisioner.list_provisioned()
+        return {
+            "provisioned_agents": agents,
+            "count": len(agents),
         }
     
     return router

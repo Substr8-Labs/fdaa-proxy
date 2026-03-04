@@ -20,6 +20,7 @@ This is Topology A - the proxy IS the Anthropic egress point.
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
@@ -40,6 +41,57 @@ from .ril import ContextIntegrityAdapter, RepairMode
 from .dct import DCTLogger
 
 logger = logging.getLogger("fdaa-proxy.anthropic")
+
+
+def load_openclaw_subscription_token() -> Optional[str]:
+    """
+    Load subscription token from OpenClaw's auth-profiles.json.
+    
+    Looks for 'anthropic:*' profiles with type='token' and returns the
+    token from the lastGood profile, or the first valid one found.
+    
+    Returns None if no subscription token is found.
+    """
+    # Standard locations for OpenClaw auth profiles
+    possible_paths = [
+        Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json",
+        Path(os.environ.get("OPENCLAW_HOME", "")) / "agents" / "main" / "agent" / "auth-profiles.json",
+    ]
+    
+    for auth_path in possible_paths:
+        if not auth_path.exists():
+            continue
+            
+        try:
+            with open(auth_path) as f:
+                data = json.load(f)
+            
+            profiles = data.get("profiles", {})
+            last_good = data.get("lastGood", {}).get("anthropic")
+            
+            # Try lastGood profile first
+            if last_good and last_good in profiles:
+                profile = profiles[last_good]
+                if profile.get("type") == "token" and profile.get("token"):
+                    token = profile["token"]
+                    # Subscription tokens start with sk-ant-oat (OAuth Access Token)
+                    if token.startswith("sk-ant-oat"):
+                        logger.info(f"Loaded subscription token from {auth_path} (profile: {last_good})")
+                        return token
+            
+            # Fall back to any anthropic token profile
+            for profile_id, profile in profiles.items():
+                if profile_id.startswith("anthropic:"):
+                    if profile.get("type") == "token" and profile.get("token"):
+                        token = profile["token"]
+                        if token.startswith("sk-ant-oat"):
+                            logger.info(f"Loaded subscription token from {auth_path} (profile: {profile_id})")
+                            return token
+                            
+        except Exception as e:
+            logger.warning(f"Failed to read auth profiles from {auth_path}: {e}")
+            
+    return None
 
 
 @dataclass
@@ -80,9 +132,20 @@ class AnthropicProxy:
         cia_mode: str = "permissive",
         dct_logger: Optional[DCTLogger] = None,
         audit_db_path: str = "./data/anthropic-audit.db",
+        subscription_token: Optional[str] = None,
     ):
         self.anthropic_api_key = anthropic_api_key
         self.audit_db_path = audit_db_path
+        
+        # Subscription token (OAuth Access Token) for pass-through auth
+        # Priority: explicit param > auto-load from OpenClaw > None
+        if subscription_token:
+            self.subscription_token = subscription_token
+            logger.info("Subscription token provided explicitly")
+        else:
+            self.subscription_token = load_openclaw_subscription_token()
+            if self.subscription_token:
+                logger.info("Subscription token loaded from OpenClaw auth profiles")
         
         # Auto-create DCTLogger if path provided and no logger passed
         if dct_logger is not None:
@@ -169,20 +232,83 @@ class AnthropicProxy:
             
             # Update payload with repaired messages
             payload["messages"] = repaired_messages
+
+            # Normalize model name for Anthropic API (strip provider prefix)
+            model = payload.get("model")
+            if isinstance(model, str) and model.startswith("anthropic/"):
+                payload["model"] = model.split("/", 1)[1]
+                logger.info(f"[{request_id}] model normalized: {model} -> {payload['model']}")
+
+            is_streaming = payload.get("stream", False)
+            logger.info(f"[{request_id}] forward model={payload.get('model')} stream={is_streaming}")
+
             repaired_body = json.dumps(payload).encode()
-            
+
             # Forward to Anthropic
             client = await self._get_client()
-            
-            # Build headers (forward most, add our auth)
+
+            # Build headers — auth priority:
+            # 1. Inbound Authorization header (pass-through)
+            # 2. Subscription token from OpenClaw auth profiles (preferred for billing)
+            # 3. Inbound x-api-key (pass-through)
+            # 4. Proxy's fallback API key
+            inbound = {k.lower(): v for k, v in request.headers.items()}
+
             headers = {
                 "Content-Type": "application/json",
-                "x-api-key": self.anthropic_api_key,
                 "anthropic-version": request.headers.get("anthropic-version", "2023-06-01"),
             }
-            
-            # Check if streaming
-            is_streaming = payload.get("stream", False)
+
+            auth_used = "none"
+
+            # Auth priority:
+            # 1. Inbound Authorization header (pass-through) - works with OAuth tokens
+            # 2. Subscription token from OpenClaw (sk-ant-oat*) via Authorization: Bearer
+            # 3. Inbound x-api-key header (pass-through)
+            # 4. Proxy's fallback API key
+            #
+            # NOTE: OAuth tokens (sk-ant-oat*) MUST use Authorization: Bearer, not x-api-key.
+            # The Anthropic SDK supports both apiKey (X-Api-Key) and authToken (Authorization: Bearer).
+
+            # 1. Prefer inbound Authorization header (pass-through)
+            if "authorization" in inbound:
+                headers["Authorization"] = inbound["authorization"]
+                auth_used = "inbound_authorization"
+
+            # 2. Use subscription token from OpenClaw if available
+            if auth_used == "none" and self.subscription_token:
+                headers["Authorization"] = f"Bearer {self.subscription_token}"
+                auth_used = "subscription_token"
+
+            # 3. Pass through inbound x-api-key (but NOT OAuth tokens — those need Bearer)
+            if auth_used == "none" and "x-api-key" in inbound:
+                inbound_key = inbound["x-api-key"]
+                if inbound_key.startswith("sk-ant-oat"):
+                    # OAuth token sent via wrong header — convert to Bearer
+                    headers["Authorization"] = f"Bearer {inbound_key}"
+                    auth_used = "inbound_oauth_converted"
+                    logger.info(f"[{request_id}] Converted OAuth token from x-api-key to Authorization: Bearer")
+                else:
+                    headers["x-api-key"] = inbound_key
+                    auth_used = "inbound_api_key"
+
+            # 4. Proxy's fallback API key (but NOT if it's an OAuth token)
+            if auth_used == "none" and self.anthropic_api_key:
+                if self.anthropic_api_key.startswith("sk-ant-oat"):
+                    headers["Authorization"] = f"Bearer {self.anthropic_api_key}"
+                    auth_used = "proxy_oauth_token"
+                else:
+                    headers["x-api-key"] = self.anthropic_api_key
+                    auth_used = "proxy_api_key"
+
+            logger.info(
+                f"[{request_id}] auth: "
+                f"in_authorization={'authorization' in inbound} "
+                f"subscription_token={bool(self.subscription_token)} "
+                f"in_x_api_key={'x-api-key' in inbound} "
+                f"proxy_key={bool(self.anthropic_api_key)} "
+                f"→ {auth_used}"
+            )
             
             if is_streaming:
                 return await self._handle_streaming(
@@ -230,33 +356,50 @@ class AnthropicProxy:
         headers: dict,
         request_id: str,
         start_time: float
-    ) -> StreamingResponse:
-        """Handle streaming request with Server-Sent Events."""
-        
+    ) -> Response:
+        """
+        Handle streaming request with Server-Sent Events.
+
+        IMPORTANT: If upstream returns non-200, return a normal Response with
+        that status code (do NOT return HTTP 200 with an empty stream).
+        """
+        # Send request in streaming mode but check status before committing
+        req = client.build_request("POST", "/v1/messages", content=body, headers=headers)
+        upstream = await client.send(req, stream=True)
+
+        if upstream.status_code != 200:
+            # Read error body and return as a normal (non-streaming) response
+            error_body = await upstream.aread()
+            await upstream.aclose()
+            try:
+                err_txt = error_body.decode("utf-8", errors="replace")
+            except Exception:
+                err_txt = repr(error_body[:2000])
+            logger.error(f"[{request_id}] upstream {upstream.status_code} error={err_txt[:2000]}")
+            elapsed = time.time() - start_time
+            logger.info(f"[{request_id}] Completed in {elapsed:.2f}s, status={upstream.status_code} (upstream error)")
+            return Response(
+                content=error_body,
+                status_code=upstream.status_code,
+                headers=dict(upstream.headers),
+            )
+
+        # Upstream returned 200 — stream it
         async def stream_response():
             bytes_out = 0
             try:
-                async with client.stream(
-                    "POST", "/v1/messages", content=body, headers=headers
-                ) as response:
-                    if response.status_code != 200:
-                        # Forward error
-                        error_body = await response.aread()
-                        yield error_body
-                        return
-                    
-                    async for chunk in response.aiter_bytes():
-                        bytes_out += len(chunk)
-                        yield chunk
-                        
+                async for chunk in upstream.aiter_bytes():
+                    bytes_out += len(chunk)
+                    yield chunk
             except Exception as e:
                 logger.error(f"[{request_id}] Streaming error: {e}")
                 yield f'data: {{"type":"error","error":{{"type":"api_error","message":"{e}"}}}}\n\n'.encode()
             finally:
+                await upstream.aclose()
                 elapsed = time.time() - start_time
                 self.stats.bytes_out += bytes_out
                 logger.info(f"[{request_id}] Stream completed in {elapsed:.2f}s, {bytes_out} bytes")
-        
+
         return StreamingResponse(
             stream_response(),
             media_type="text/event-stream",
@@ -308,6 +451,11 @@ class AnthropicProxy:
         return JSONResponse({
             "proxy": "fdaa-anthropic-proxy",
             "upstream": self.ANTHROPIC_BASE_URL,
+            "auth": {
+                "subscription_token": bool(self.subscription_token),
+                "api_key_fallback": bool(self.anthropic_api_key),
+                "mode": "subscription" if self.subscription_token else ("api_key" if self.anthropic_api_key else "pass_through"),
+            },
             "cia": {
                 "enabled": True,
                 "mode": self.cia.mode.value,
