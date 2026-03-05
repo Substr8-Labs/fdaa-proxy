@@ -1,187 +1,408 @@
-# FDAA Proxy
+# Substr8
 
-**Governed Gateway with Cryptographic Audit Trails**
+**Governance infrastructure for AI agents.**
 
-The FDAA Proxy provides governance for AI agent runtimes:
+![Framework Agnostic](https://img.shields.io/badge/framework-agnostic-blue)
+![RunProof](https://img.shields.io/badge/verification-RunProof-green)
+![MCP Compatible](https://img.shields.io/badge/protocol-MCP-purple)
 
-1. **OpenClaw Gateway Proxy** — WebSocket proxy for OpenClaw with ACC/DCT
-2. **MCP Server Proxy** — HTTP proxy for MCP servers (legacy)
-
+```mermaid
+flowchart TD
+    A[AI Application]
+    B[Agent Framework<br>LangGraph • AutoGen • CrewAI]
+    C[Substr8 Governance Layer]
+    D[RunProof]
+    E[LLM Providers]
+    
+    A --> B
+    B --> C
+    C --> D
+    C --> E
 ```
-Agent → FDAA Proxy → Policy Check → Audit Log → Upstream MCP Server
-                  ↓
-            ACC Token Validation
-                  ↓  
-            DCT Audit Chain
-```
 
-## Features
+> Substr8 is the **governance layer for AI agents**, producing **RunProof** — a portable artifact that proves what an agent did.
 
-- **W^X Enforcement** — Separate read and write permissions (Write XOR Execute)
-- **Policy Engine** — Allowlist/blocklist tools, rate limiting, approval workflows
-- **ACC Integration** — Validate capability tokens before allowing operations
-- **DCT Audit** — Cryptographic audit trail with hash chain verification
-- **Virtual MCP Server** — Expose filtered tool surface to agents
-- **Approval Workflows** — Human-in-the-loop for high-risk operations
+---
 
-## Quick Start
+Substr8 adds **verifiability, auditability, and policy enforcement** to AI agents — without requiring changes to your framework.
 
-### OpenClaw Gateway Proxy (Primary)
+Works with:
+
+* LangGraph
+* AutoGen
+* PydanticAI
+* CrewAI
+* DSPy
+* Custom agents
+
+Any framework that supports **tool calling** can connect to Substr8 through **MCP**.
+
+---
+
+## Why Substr8
+
+AI agents today have a fundamental trust problem.
+
+When an agent says:
+
+> "I searched the web and wrote the memory."
+
+Did it actually? Did it follow policy? Did it modify memory? Did it call the right tools?
+
+Most systems rely on **logs or dashboards**. Substr8 produces **cryptographic receipts** for every run.
+
+Every governed run outputs a **RunProof** — a portable artifact that proves:
+
+* which agent ran
+* what it was allowed to do
+* what actions occurred
+* what memory was touched
+* that the audit chain is intact
+
+You can verify this **offline**.
+
+---
+
+## Quickstart (2 minutes)
+
+Install the CLI:
 
 ```bash
-# Install
-pip install fdaa-proxy
-
-# Start the proxy in front of OpenClaw Gateway
-fdaa-proxy openclaw start --upstream ws://localhost:18789
-
-# With ACC token requirement
-fdaa-proxy openclaw start --require-acc --upstream ws://localhost:18789
+pip install substr8
 ```
 
-### MCP Server Proxy (Legacy)
+Initialize a project:
 
 ```bash
-# Configure
-fdaa-proxy init
-
-# Start MCP gateway
-fdaa-proxy start --config gateway.yaml
+substr8 init my-agent
+cd my-agent
 ```
+
+This creates:
+
+```
+my-agent/
+  examples/
+    langgraph/
+    autogen/
+    pydantic-ai/
+  runproofs/
+  .env.example
+  README.md
+```
+
+Run a governed agent:
+
+```bash
+substr8 run examples/langgraph/agent.py --local
+```
+
+Example output:
+
+```
+Substr8 Governance: ACTIVE
+
+Run ID: run-6c39af
+
+ACC policy loaded
+CIA integrity checks enabled
+DCT ledger initialized
+
+Running agent...
+
+Run completed ✓
+RunProof generated: ./runproofs/run-6c39af.runproof.tgz
+```
+
+Verify the run:
+
+```bash
+substr8 verify runproofs/run-6c39af.runproof.tgz
+```
+
+Output:
+
+```
+RunProof Verified ✓
+
+Run:     run-6c39af
+Agent:   langgraph:researcher
+Policy:  verified
+Ledger:  chain valid
+CIA receipts: present
+Memory provenance: verified
+```
+
+---
+
+## What is RunProof?
+
+RunProof is a **portable verification artifact** produced for every governed run.
+
+Think of it like:
+
+| Technology   | Equivalent                     |
+| ------------ | ------------------------------ |
+| Docker       | container image                |
+| SBOM         | software bill of materials     |
+| Sigstore     | supply chain verification      |
+| **RunProof** | **AI agent run verification**  |
+
+A RunProof contains:
+
+```
+runproof/
+  run.json
+  agent/
+    fdaa.manifest.json
+  policy/
+    acc.policy.json
+  ledger/
+    dct.ledger.jsonl
+  cia/
+    cia.receipts.jsonl
+  memory/
+    gam.pointers.jsonl
+  RUNPROOF.sha256
+```
+
+You can verify it with:
+
+```bash
+substr8 verify <runproof.tgz>
+```
+
+No dashboard required.
+
+---
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        FDAA Proxy                           │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │ ACC Layer   │  │ Policy      │  │ DCT Audit           │  │
-│  │             │  │ Engine      │  │ Logger              │  │
-│  │ - Token     │  │             │  │                     │  │
-│  │   validation│  │ - W^X rules │  │ - Hash chains       │  │
-│  │ - Capability│  │ - Allowlist │  │ - Tamper detection  │  │
-│  │   checking  │  │ - Rate limit│  │ - Event logging     │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────────┐│
-│  │                    Gateway Pool                         ││
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐              ││
-│  │  │ GitHub   │  │ Slack    │  │ Custom   │  ...         ││
-│  │  │ Gateway  │  │ Gateway  │  │ Gateway  │              ││
-│  │  └──────────┘  └──────────┘  └──────────┘              ││
-│  └─────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────┘
-```
+Substr8 sits **between agent frameworks and model providers**.
 
-## Configuration
-
-```yaml
-# gateway.yaml
-server:
-  host: 0.0.0.0
-  port: 8766
-
-# ACC capability token validation
-acc:
-  enabled: true
-  issuer: "https://acc.substr8labs.com"
-  # Or local validation
-  # public_key_path: /etc/fdaa/acc-public.pem
-
-# DCT audit chain
-dct:
-  enabled: true
-  storage: sqlite  # sqlite | mongodb | postgres
-  path: /var/lib/fdaa/audit.db
-
-# MCP server connections
-gateways:
-  github:
-    server: "@anthropic/mcp-server-github"
-    env:
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-    policy:
-      mode: allowlist
-      tools:
-        - name: get_file_contents
-          category: read
-        - name: create_issue
-          category: write
-          requires_approval: true
-
-  slack:
-    server: "@anthropic/mcp-server-slack"
-    env:
-      SLACK_TOKEN: ${SLACK_TOKEN}
-    policy:
-      mode: allowlist
-      tools:
-        - name: list_channels
-          category: read
+```mermaid
+flowchart TD
+    A[AI Application<br>Chatbots • Automation • SaaS]
+    B[Agent Frameworks<br>LangGraph • AutoGen • PydanticAI • CrewAI]
+    C[MCP Interface<br>Tool Calling]
+    D[Substr8 Governance Plane]
+    
+    E[FDAA<br>Agent Definition]
+    F[ACC<br>Policy Engine]
+    G[RIL<br>Run Lifecycle]
+    H[DCT<br>Audit Ledger]
+    I[CIA<br>Conversation Integrity]
+    J[GAM<br>Memory Provenance]
+    
+    K[RunProof<br>Portable Verification Artifact]
+    L[LLM Providers<br>OpenAI • Anthropic • Cohere]
+    
+    A --> B
+    B --> C
+    C --> D
+    
+    D --> E
+    D --> F
+    D --> G
+    D --> H
+    D --> I
+    D --> J
+    
+    E --> K
+    F --> K
+    G --> K
+    H --> K
+    I --> K
+    J --> K
+    
+    D --> L
 ```
 
-## CLI Commands
+Substr8 **does not replace frameworks**. It adds a **governance layer**.
+
+---
+
+## Zero-Friction Integration
+
+Add Substr8 to any agent with **one wrapper**:
+
+```python
+from substr8 import govern
+
+# Before
+agent = create_react_agent(llm, tools)
+
+# After
+agent = govern(create_react_agent(llm, tools))
+```
+
+That's it. The wrapper automatically:
+
+1. Starts a **run lifecycle**
+2. Injects **policy checks**
+3. Wraps **tool calls**
+4. Emits **DCT ledger entries**
+5. Records **CIA receipts**
+6. Tracks **GAM memory operations**
+7. Generates **RunProof on completion**
+
+---
+
+## Example: LangGraph Integration
+
+```python
+from substr8 import tool
+
+@tool("web_search")
+def web_search(query: str):
+    ...
+```
+
+Run with Substr8 governance:
 
 ```bash
-# Gateway management
-fdaa-proxy start              # Start gateway server
-fdaa-proxy stop               # Stop gateway server  
-fdaa-proxy status             # Show gateway status
-fdaa-proxy reload             # Reload configuration
-
-# Gateway operations
-fdaa-proxy gateways list      # List connected gateways
-fdaa-proxy gateways connect   # Connect a new gateway
-fdaa-proxy gateways tools     # List available tools
-
-# Audit
-fdaa-proxy audit list         # Query audit log
-fdaa-proxy audit verify       # Verify hash chain integrity
-fdaa-proxy audit export       # Export audit log
-
-# Approvals
-fdaa-proxy approvals list     # List pending approvals
-fdaa-proxy approvals approve  # Approve a request
-fdaa-proxy approvals deny     # Deny a request
+substr8 run agent.py
 ```
 
-## API Endpoints
+Every tool call will be:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Health check |
-| `/gateways` | GET | List connected gateways |
-| `/gateways` | POST | Register new gateway |
-| `/gateways/{id}` | DELETE | Disconnect gateway |
-| `/gateways/{id}/tools` | GET | List available tools |
-| `/gateways/{id}/call` | POST | Call a tool |
-| `/gateways/{id}/pending` | GET | List pending approvals |
-| `/gateways/{id}/approve/{req}` | POST | Approve/deny request |
-| `/audit` | GET | Query audit log |
+* policy checked
+* ledger recorded
+* integrity verified
+* included in RunProof
 
-## Integration with Substr8
+---
 
-FDAA Proxy is part of the Substr8 platform stack:
+## Supported Frameworks
 
-- **FDAA** — Deterministic execution foundation
-- **ACC** — Capability token system (this validates tokens)
-- **DCT** — Cryptographic audit trails (this logs here)
-- **GAM** — Agent memory system
+| Framework  | Status |
+| ---------- | ------ |
+| LangGraph  | ✅      |
+| PydanticAI | ✅      |
+| AutoGen    | ✅      |
+| CrewAI     | ⚡      |
+| DSPy       | ⚡      |
+
+Any framework supporting **tool calling** can integrate via MCP.
+
+---
+
+## Local Development
+
+Run everything locally:
 
 ```bash
-# Via substr8 CLI
-substr8 gateway start
-substr8 gateway status
-substr8 audit verify
+substr8 mcp start --local
 ```
+
+Local stack includes:
+
+* MCP governance server
+* audit ledger
+* memory layer (optional)
+* RunProof generation
+
+---
+
+## MCP Server
+
+Connect Claude Desktop or any MCP client:
+
+```json
+{
+  "mcpServers": {
+    "substr8": {
+      "url": "https://mcp.substr8labs.com",
+      "headers": {
+        "X-Substr8-Key": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+Available tools:
+
+| Category   | Tools                                           |
+| ---------- | ----------------------------------------------- |
+| Governance | `run.start`, `run.end`, `tool.invoke`, `policy.check` |
+| Audit      | `audit.timeline`, `verify.run`                  |
+| Memory     | `memory.write`, `memory.search`                 |
+| CIA        | `cia.status`, `cia.report`, `cia.repairs`, `cia.receipts` |
+
+---
+
+## Substr8 Cloud (coming soon)
+
+Connect to a hosted governance plane:
+
+```bash
+substr8 connect substr8.cloud
+```
+
+Cloud mode provides:
+
+* hosted ledger
+* hosted memory infrastructure
+* RunProof storage
+* verification dashboard
+* policy management
+
+---
+
+## Why This Matters
+
+AI agents are becoming responsible for:
+
+* automation
+* financial transactions
+* customer interaction
+* knowledge management
+
+But today they operate largely on **trust**.
+
+Substr8 replaces that with **verifiable infrastructure**.
+
+---
+
+## Core Philosophy
+
+> AI agents should leave receipts.
+
+Every action. Every policy decision. Every memory write.
+
+**Provable.**
+
+---
+
+## The Category
+
+Substr8 is **Agent Governance Infrastructure**.
+
+| Tool      | Category                  |
+| --------- | ------------------------- |
+| Datadog   | observability             |
+| Stripe    | payments infrastructure   |
+| Docker    | container runtime         |
+| **Substr8** | **agent governance**    |
+
+> Frameworks build agents. Substr8 proves what they did.
+
+---
+
+## Roadmap
+
+- [ ] RunProof signatures
+- [ ] `verify.substr8labs.com` public verification
+- [ ] ThreadHQ visualization
+- [ ] Hosted governance plane
+- [ ] Enterprise policy engine
+- [ ] Compliance exports
+
+---
 
 ## License
 
-Apache-2.0
+Copyright © 2026 Substr8 Labs.
 
-## Links
-
-- [FDAA Whitepaper](https://github.com/Substr8-Labs/whitepapers/tree/main/fdaa)
-- [ACC Whitepaper](https://github.com/Substr8-Labs/whitepapers/tree/main/acc)
-- [DCT Whitepaper](https://github.com/Substr8-Labs/whitepapers/tree/main/dct)
+Open protocol. Extensible infrastructure.
