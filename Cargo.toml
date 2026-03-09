@@ -1,0 +1,45 @@
+[package]
+name = "substr8"
+version = "0.1.0"
+edition = "2021"
+description = "Substr8 CLI - Provable AI agent infrastructure"
+license = "MIT"
+
+[[bin]]
+name = "substr8"
+path = "src/main.rs"
+
+[dependencies]
+# DCT for capability verification
+dct-core = { path = "../substr8-dct/dct-core" }
+
+# HTTP server
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# HTTP client (to forward to OpenClaw) - use rustls to avoid OpenSSL dep
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Utils
+anyhow = "1"
+base64 = "0.22"
+# Pin chrono without 'oldtime' feature to avoid time crate requiring Rust 1.88+
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# Pin time to version compatible with Rust 1.85
+time = "=0.3.36"
+
+[dev-dependencies]
+tokio-test = "0.4"

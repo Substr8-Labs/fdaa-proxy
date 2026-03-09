@@ -1,0 +1,40 @@
+# Substr8 DCT Proxy - Multi-stage build
+FROM rust:1.85-slim AS builder
+
+WORKDIR /build
+
+# Install build dependencies (curl for healthcheck)
+RUN apt-get update && apt-get install -y pkg-config && rm -rf /var/lib/apt/lists/*
+
+# Copy substr8-cli (gateway proxy)
+COPY substr8-cli/Cargo.toml substr8-cli/Cargo.lock ./substr8-cli/
+COPY substr8-cli/src ./substr8-cli/src
+
+# Copy dct-core dependency  
+COPY substr8-dct/Cargo.toml ./substr8-dct/
+COPY substr8-dct/dct-core ./substr8-dct/dct-core
+
+# Build release binary
+WORKDIR /build/substr8-cli
+RUN cargo build --release
+
+# Runtime stage - minimal image
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/substr8-cli/target/release/substr8 /usr/local/bin/
+
+# DCT authority key mount point
+VOLUME ["/secrets"]
+
+# Proxy port
+EXPOSE 18800
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:18800/health || exit 1
+
+# Start proxy only (OpenClaw is separate container)
+ENTRYPOINT ["substr8", "gateway", "start", "--no-openclaw"]
+CMD ["--require-token", "--openclaw-host", "openclaw"]

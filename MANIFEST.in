@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+recursive-include substr8 *.py
+recursive-exclude * __pycache__
+recursive-exclude * *.pyc
+recursive-exclude * *.pyo
+recursive-exclude * .git*
+global-exclude *.sqlite
+global-exclude .DS_Store

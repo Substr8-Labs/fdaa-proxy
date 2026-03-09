@@ -1,0 +1,13 @@
+{
+  "name": "openclaw-bridge",
+  "version": "0.1.0",
+  "description": "HTTP bridge for OpenClaw - exposes Anthropic-compatible API",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

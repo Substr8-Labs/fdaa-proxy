@@ -1,0 +1,24 @@
+# OpenClaw Gateway Container
+FROM node:22-slim
+
+# Install dependencies (git required for openclaw npm install)
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+# Install OpenClaw
+RUN npm install -g openclaw
+
+# Create workspace
+RUN mkdir -p /root/.openclaw/workspace
+
+# Gateway config will be mounted
+VOLUME ["/root/.openclaw"]
+
+# Gateway port
+EXPOSE 18789
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD openclaw gateway probe || exit 1
+
+# Start gateway (foreground mode)
+CMD ["openclaw", "gateway", "start", "--foreground"]

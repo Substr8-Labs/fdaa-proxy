@@ -1,0 +1,73 @@
+# Substr8 Gateway Stack
+# DCT proxy (sidecar) + OpenClaw gateway
+#
+# Usage: 
+#   substr8 gateway up -d
+#   substr8 gateway logs -f
+#   substr8 gateway down
+#
+# External: localhost:18800 → proxy → openclaw:18789
+
+services:
+  # OpenClaw Gateway (internal)
+  openclaw:
+    image: substr8/openclaw-gateway:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.openclaw
+    container_name: substr8-openclaw
+    restart: unless-stopped
+    volumes:
+      # Mount config and workspace
+      - openclaw-config:/root/.openclaw
+      - ${WORKSPACE_PATH:-./workspace}:/root/.openclaw/workspace
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=1024
+    networks:
+      - substr8-internal
+    # Not exposed externally - only proxy can reach it
+    expose:
+      - "18789"
+    healthcheck:
+      test: ["CMD", "openclaw", "gateway", "probe"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # DCT Proxy (sidecar) - external entry point
+  proxy:
+    image: substr8/dct-proxy:latest
+    build:
+      # Build context is workspace root (needs substr8-cli + substr8-dct)
+      context: ../..
+      dockerfile: substr8-cli/docker/Dockerfile.proxy
+    container_name: substr8-proxy
+    restart: unless-stopped
+    depends_on:
+      openclaw:
+        condition: service_healthy
+    ports:
+      # External access through proxy only
+      - "${PROXY_PORT:-18800}:18800"
+    environment:
+      - RUST_LOG=info,substr8=debug
+      - SUBSTR8_AUTHORITY_KEY_FILE=/secrets/dct-authority.key
+    volumes:
+      # DCT authority key
+      - ${SECRETS_PATH:-~/.openclaw/secrets}:/secrets:ro
+    networks:
+      - substr8-internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18800/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  substr8-internal:
+    driver: bridge
+
+volumes:
+  openclaw-config:

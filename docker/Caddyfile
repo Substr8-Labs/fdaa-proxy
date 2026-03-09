@@ -1,0 +1,14 @@
+mcp.substr8labs.com {
+    reverse_proxy mcp-server:3456
+    
+    # CORS headers for browser access
+    header {
+        Access-Control-Allow-Origin *
+        Access-Control-Allow-Methods "GET, POST, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, X-Substr8-Key, Authorization"
+    }
+    
+    # Handle preflight
+    @options method OPTIONS
+    respond @options 204
+}

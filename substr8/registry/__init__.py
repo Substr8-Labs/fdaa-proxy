@@ -1,0 +1,1 @@
+"""Run Registry CLI module."""
