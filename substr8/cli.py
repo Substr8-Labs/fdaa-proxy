@@ -14,7 +14,7 @@ console = Console()
 
 
 @click.group()
-@click.version_option(version="1.7.0", prog_name="substr8")
+@click.version_option(version="1.7.1", prog_name="substr8")
 def main():
     """Substr8 Platform CLI - Verifiable AI Infrastructure"""
     pass
