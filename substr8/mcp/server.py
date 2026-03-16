@@ -678,6 +678,57 @@ class Substr8MCPServer:
                 "rate_limiting": self.config.rate_limiting
             }
         
+        # === REST API for Web UIs (TowerHQ, etc.) ===
+        
+        @app.get("/api/memory")
+        async def api_memory_list(
+            q: Optional[str] = None,
+            agent: Optional[str] = None,
+            limit: int = 50
+        ):
+            """REST endpoint for memory listing/search - for web UIs."""
+            query = q or "recent updates decisions summary"
+            result = self.tool_memory_search({
+                "query": query,
+                "agent_id": agent or "ada",
+                "limit": limit
+            })
+            return {
+                "memories": result.get("results", []),
+                "total": result.get("total", 0),
+                "query": q,
+                "provenance": result.get("provenance")
+            }
+        
+        @app.get("/api/memory/search")
+        async def api_memory_search(
+            q: str,
+            agent: Optional[str] = None,
+            limit: int = 20
+        ):
+            """REST endpoint for semantic memory search - for web UIs."""
+            result = self.tool_memory_search({
+                "query": q,
+                "agent_id": agent or "ada",
+                "limit": limit
+            })
+            return {
+                "results": result.get("results", []),
+                "total": result.get("total", 0),
+                "query": q,
+                "provenance": result.get("provenance")
+            }
+        
+        @app.get("/api/memory/stats")
+        async def api_memory_stats():
+            """REST endpoint for memory stats - for web UIs."""
+            result = self.tool_memory_stats({})
+            return {
+                "total": result.get("total", 0),
+                "perAgent": result.get("per_agent", {}),
+                "lastUpdated": result.get("last_updated")
+            }
+        
         # === Admin endpoints ===
         
         @app.post("/admin/keys/generate")
@@ -913,15 +964,84 @@ class Substr8MCPServer:
         }
     
     def tool_memory_search(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Search memory with provenance output."""
-        # Stub - would integrate with GAM
-        return {
-            "results": [],
-            "query": payload.get("query", ""),
-            "provenance": {
-                "search_at": datetime.now(timezone.utc).isoformat()
+        """Search memory via GAM with provenance output."""
+        import httpx
+        
+        query = payload.get("query", "")
+        agent_id = payload.get("agent_id", "ada")
+        limit = payload.get("limit", 20)
+        gam_url = os.environ.get("GAM_URL", "http://localhost:8091")
+        
+        try:
+            response = httpx.post(
+                f"{gam_url}/v3/search",
+                json={"query": query, "agent_id": agent_id, "limit": limit},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            results = response.json()
+            
+            # Transform to standard format with provenance
+            return {
+                "results": [
+                    {
+                        "id": str(r.get("id")),
+                        "content": r.get("content", "")[:500],
+                        "file_path": r.get("file_path", ""),
+                        "similarity": r.get("similarity", 0),
+                        "attention_score": r.get("attention_score", 0.5),
+                        "committed_at": r.get("committed_at"),
+                        "commit_hash": (r.get("commit_hash") or "")[:12],
+                    }
+                    for r in results
+                ],
+                "query": query,
+                "total": len(results),
+                "provenance": {
+                    "source": "gam",
+                    "gam_url": gam_url,
+                    "search_at": datetime.now(timezone.utc).isoformat()
+                }
             }
-        }
+        except Exception as e:
+            return {
+                "results": [],
+                "query": query,
+                "error": str(e),
+                "provenance": {
+                    "source": "gam",
+                    "search_at": datetime.now(timezone.utc).isoformat()
+                }
+            }
+    
+    def tool_memory_stats(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Get memory stats from GAM."""
+        import httpx
+        
+        agents = payload.get("agents", ["ada", "grace", "tony", "val"])
+        gam_url = os.environ.get("GAM_URL", "http://localhost:8091")
+        
+        stats = {"total": 0, "per_agent": {}, "last_updated": None}
+        
+        for agent_id in agents:
+            try:
+                response = httpx.get(
+                    f"{gam_url}/stats",
+                    params={"agent_id": agent_id},
+                    timeout=5.0
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    count = data.get("total_entries", 0)
+                    stats["per_agent"][agent_id] = count
+                    stats["total"] += count
+                    if data.get("latest_commit"):
+                        if not stats["last_updated"] or data["latest_commit"] > stats["last_updated"]:
+                            stats["last_updated"] = data["latest_commit"]
+            except Exception:
+                stats["per_agent"][agent_id] = 0
+        
+        return stats
     
     def tool_invoke(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
