@@ -362,5 +362,228 @@ def stats(registry: str):
     click.echo(f"  Organizations: {s.get('organizations', 0)}")
 
 
+# ============ Lifecycle Commands ============
+
+RUNPROOF_URL = os.environ.get("RUNPROOF_URL", "http://localhost:8097")
+
+
+def lifecycle_api_call(method: str, path: str, data: dict = None) -> dict:
+    """Make API call to RunProof Builder for lifecycle commands."""
+    import urllib.request
+    import json as json_module
+    
+    url = f"{RUNPROOF_URL}{path}"
+    
+    if data:
+        req = urllib.request.Request(
+            url,
+            data=json_module.dumps(data).encode(),
+            headers={"Content-Type": "application/json"},
+            method=method
+        )
+    else:
+        req = urllib.request.Request(url, method=method)
+    
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json_module.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode()
+        try:
+            return {"error": json_module.loads(error_body).get("detail", error_body)}
+        except:
+            return {"error": error_body}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@agent.group()
+def lifecycle():
+    """Agent lifecycle commands (always-on agents)."""
+    pass
+
+
+@lifecycle.command("register")
+@click.argument("agent_id")
+@click.option("--metadata", "-m", help="JSON metadata")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def lifecycle_register(agent_id: str, metadata: str, as_json: bool):
+    """Register an always-on agent.
+    
+    Example:
+        substr8 agent lifecycle register ada
+        substr8 agent lifecycle register ada --metadata '{"role": "co-founder"}'
+    """
+    data = {}
+    if metadata:
+        data["metadata"] = json.loads(metadata)
+    
+    result = lifecycle_api_call("POST", f"/v1/agent/{agent_id}/register", data if data else None)
+    
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+    
+    if "error" in result:
+        click.echo(f"❌ Error: {result['error']}", err=True)
+        sys.exit(1)
+    
+    click.echo(f"✅ Agent registered: {agent_id}")
+    click.echo(f"   Status: {result.get('status')}")
+
+
+@lifecycle.command("heartbeat")
+@click.argument("agent_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def lifecycle_heartbeat(agent_id: str, as_json: bool):
+    """Record agent heartbeat.
+    
+    Example:
+        substr8 agent lifecycle heartbeat ada
+    """
+    result = lifecycle_api_call("POST", f"/v1/agent/{agent_id}/heartbeat")
+    
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+    
+    if "error" in result:
+        click.echo(f"❌ Error: {result['error']}", err=True)
+        sys.exit(1)
+    
+    click.echo(f"✅ Heartbeat recorded: {agent_id}")
+
+
+@lifecycle.command("status")
+@click.argument("agent_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def lifecycle_status(agent_id: str, as_json: bool):
+    """Get agent lifecycle status.
+    
+    Example:
+        substr8 agent lifecycle status ada
+    """
+    result = lifecycle_api_call("GET", f"/v1/agent/{agent_id}/lifecycle")
+    
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+    
+    if "error" in result:
+        click.echo(f"❌ Error: {result['error']}", err=True)
+        sys.exit(1)
+    
+    status = result.get("status", "unknown")
+    status_style = {"active": "green", "paused": "yellow", "retired": "red"}.get(status, "dim")
+    
+    click.echo(f"\n📊 Agent Lifecycle: {agent_id}")
+    click.echo(f"{'='*40}")
+    click.echo(f"  Status:     {status}")
+    click.echo(f"  Registered: {result.get('registered_at', 'N/A')}")
+    click.echo(f"  Heartbeat:  {result.get('last_heartbeat', 'N/A')}")
+    click.echo(f"  Runs:       {result.get('total_runs', 0)}")
+    click.echo(f"  Entries:    {result.get('total_entries', 0)}")
+
+
+@lifecycle.command("pause")
+@click.argument("agent_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def lifecycle_pause(agent_id: str, as_json: bool):
+    """Pause an active agent.
+    
+    Example:
+        substr8 agent lifecycle pause ada
+    """
+    result = lifecycle_api_call("POST", f"/v1/agent/{agent_id}/pause")
+    
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+    
+    if "error" in result:
+        click.echo(f"❌ Error: {result['error']}", err=True)
+        sys.exit(1)
+    
+    click.echo(f"✅ Agent paused: {agent_id}")
+
+
+@lifecycle.command("activate")
+@click.argument("agent_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def lifecycle_activate(agent_id: str, as_json: bool):
+    """Activate a paused agent.
+    
+    Example:
+        substr8 agent lifecycle activate ada
+    """
+    result = lifecycle_api_call("POST", f"/v1/agent/{agent_id}/activate")
+    
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+    
+    if "error" in result:
+        click.echo(f"❌ Error: {result['error']}", err=True)
+        sys.exit(1)
+    
+    click.echo(f"✅ Agent activated: {agent_id}")
+
+
+@lifecycle.command("retire")
+@click.argument("agent_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def lifecycle_retire(agent_id: str, as_json: bool):
+    """Retire an agent (preserves history).
+    
+    Example:
+        substr8 agent lifecycle retire old-agent
+    """
+    result = lifecycle_api_call("POST", f"/v1/agent/{agent_id}/retire")
+    
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+    
+    if "error" in result:
+        click.echo(f"❌ Error: {result['error']}", err=True)
+        sys.exit(1)
+    
+    click.echo(f"✅ Agent retired: {agent_id}")
+
+
+@lifecycle.command("active")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def lifecycle_active(as_json: bool):
+    """List active agents.
+    
+    Example:
+        substr8 agent lifecycle active
+    """
+    result = lifecycle_api_call("GET", "/v1/agents/active")
+    
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+    
+    if "error" in result:
+        click.echo(f"❌ Error: {result['error']}", err=True)
+        sys.exit(1)
+    
+    agents = result.get("agents", [])
+    
+    if not agents:
+        click.echo("No active agents")
+        return
+    
+    click.echo(f"\n📋 Active Agents ({len(agents)})")
+    click.echo(f"{'='*50}")
+    
+    for a in agents:
+        stale = "⚠️ STALE" if a.get("is_stale") else ""
+        click.echo(f"\n  {a['agent_id']} {stale}")
+        click.echo(f"    Last heartbeat: {a.get('last_heartbeat', 'N/A')}")
+        click.echo(f"    Runs: {a.get('total_runs', 0)}")
+
+
 # Export for main CLI
 __all__ = ["agent"]
