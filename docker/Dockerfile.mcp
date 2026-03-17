@@ -24,14 +24,13 @@ COPY substr8/ ./substr8/
 RUN useradd -m -u 1000 substr8
 USER substr8
 
-# Default port (Railway sets PORT env var)
-ENV PORT=3456
-ENV MCP_PORT=${PORT}
-EXPOSE 3456
+# Default port (Railway sets PORT env var at runtime)
+ENV PORT=8080
+EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+# Health check disabled - Railway handles this
+# HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+#     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Default command - MCP server (uses MCP_PORT from env)
-CMD python -m substr8.mcp --host 0.0.0.0 --port ${PORT}
+# Start server - PORT env var is set by Railway
+CMD ["sh", "-c", "python -m substr8.mcp --host 0.0.0.0 --port $PORT"]
