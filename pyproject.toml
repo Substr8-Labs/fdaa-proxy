@@ -1,6 +1,6 @@
 [project]
 name = "substr8"
-version = "1.7.2"
+version = "1.8.0"
 description = "Substr8 Platform CLI - Verifiable AI Infrastructure"
 readme = "README.md"
 requires-python = ">=3.10"
