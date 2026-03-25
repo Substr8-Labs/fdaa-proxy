@@ -185,6 +185,14 @@ from substr8.sandbox.cli import sandbox as sandbox_main
 main.add_command(sandbox_main, name="sandbox")
 
 
+# === Platform (Docker orchestration) ===
+
+from substr8.platform.cli import platform as platform_main
+
+# Register platform as a subcommand group
+main.add_command(platform_main, name="platform")
+
+
 # === Init Command (Top-level) ===
 
 @main.command()
