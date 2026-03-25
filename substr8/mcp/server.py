@@ -26,6 +26,7 @@ try:
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
+    FastAPI = None  # For type hints when not installed
 
 
 class APIKeyManager:
