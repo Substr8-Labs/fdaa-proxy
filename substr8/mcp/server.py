@@ -687,7 +687,8 @@ class Substr8MCPServer:
             limit: int = 50
         ):
             """REST endpoint for memory listing/search - for web UIs."""
-            query = q or "recent updates decisions summary"
+            # Use "##" as default - matches markdown headers in most memories
+            query = q or "##"
             result = self.tool_memory_search({
                 "query": query,
                 "agent_id": agent or "ada",

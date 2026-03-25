@@ -177,6 +177,14 @@ from substr8.dev.cli import dev as dev_main
 main.add_command(dev_main, name="dev")
 
 
+# === Sandbox (NemoClaw/OpenShell) ===
+
+from substr8.sandbox.cli import sandbox as sandbox_main
+
+# Register sandbox as a subcommand group
+main.add_command(sandbox_main, name="sandbox")
+
+
 # === Init Command (Top-level) ===
 
 @main.command()
