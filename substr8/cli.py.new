@@ -466,6 +466,10 @@ def status():
     console.print()
 
 
+if __name__ == "__main__":
+    main()
+
+
 # === Registry Integration ===
 
 from substr8.registry.cli import main as registry_main
@@ -480,39 +484,3 @@ from substr8.proof.cli import proof as proof_group
 
 # Register proof as a subcommand group with all protocol commands
 main.add_command(proof_group, name="proof")
-
-
-# === Harness (harness-core integration) ===
-
-from substr8.harness.cli import harness as harness_main
-
-# Register harness as a subcommand group
-main.add_command(harness_main, name="harness")
-
-
-# === Memory (Governed Memory Pipeline) ===
-
-from substr8.memory.cli import memory as memory_main
-
-# Register memory as a subcommand group
-main.add_command(memory_main, name="memory")
-
-
-# === ThreadHQ (Run Graph Visualization) ===
-
-from substr8.threadhq.cli import threadhq as threadhq_main
-
-# Register threadhq as a subcommand group
-main.add_command(threadhq_main, name="threadhq")
-
-
-# === Platform v2 (Docker Compose orchestration) ===
-
-from substr8.platform_v2.cli import platform_v2 as platform_v2_main
-
-# Register platform-v2 as a subcommand group
-main.add_command(platform_v2_main, name="platform-v2")
-
-
-if __name__ == "__main__":
-    main()
